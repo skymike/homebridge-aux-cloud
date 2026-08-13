@@ -86,6 +86,45 @@ All devices in your AUX Cloud account are discovered automatically — no `devic
 
 ---
 
+### Experimental — AUX Home (EU only)
+
+> **Experimental in this release.** Select this provider only for an AUX Home account in the EU region. Existing configurations that omit `provider` continue to use AC Freedom.
+
+```jsonc
+{
+  "platform": "AuxCloudPlatform",
+  "name": "Aux Cloud",
+  "provider": "aux-home",
+  "region": "eu",
+  "username": "your-aux-home-email",
+  "password": "your-aux-home-password"
+}
+```
+
+The plugin keeps the supplied credentials and the resulting session material in process memory only. Do not share your Homebridge configuration, account information, device identifiers, or transport diagnostics in support requests.
+
+#### Supported AUX Home controls
+
+- Power, whole- and half-degree target temperatures, and Auto, Cool, Dry, Heat, and Fan modes.
+- Auto, Low, Medium, High, Turbo, and Quiet fan settings.
+- Vertical automatic swing and five fixed vertical positions; horizontal swing on or off.
+- Display, ECO, sleep, and health switches when enabled with `featureSwitches`.
+
+Account automations are intentionally deferred: iFavor, Pet Hosting, sleep curves, timers, and power-limit settings are not supported by this experimental provider.
+
+#### State updates and reconnects
+
+MQTT is the primary source of live state. Changes from the physical remote are pushed into the HomeKit and Matter accessories without waiting for the normal polling interval. If a pushed update is missed or MQTT is reconnecting, the normal periodic refresh continues as a fallback reconciliation path. A disconnected MQTT session automatically retries with bounded backoff and resubscribes to the account's discovered devices after reconnecting.
+
+#### Troubleshooting AUX Home safely
+
+- Confirm `provider` is `aux-home`, `region` is `eu`, and both `username` and `password` are set in Homebridge.
+- After changing credentials or provider settings, restart Homebridge and allow the next periodic refresh while a reconnect is in progress.
+- For a login or connectivity problem, record only the time, the provider error class/message, and the installed plugin version. Never attach raw configuration files, login responses, account/session values, device IDs, or MQTT diagnostics containing identifiers.
+- If physical-remote changes do not appear promptly, note whether Homebridge later catches up on its periodic refresh; this helps distinguish a live-update connection issue from device-state discovery without exposing private data.
+
+---
+
 ### Mode 3 — Cloud + LAN (local-first with cloud fallback)
 
 Use this mode to get the responsiveness of local control while retaining cloud as a backup. Requires both cloud credentials and the `devices` list for devices you want to control locally.
@@ -128,6 +167,7 @@ Use this mode to get the responsiveness of local control while retaining cloud a
 | `name` | string | `"Aux Cloud"` | Platform name shown in Homebridge |
 | `username` | string | — | AUX Cloud **email address**. **Not required for LAN-only mode.** See note below about phone numbers. |
 | `password` | string | — | AUX Cloud password. **Not required for LAN-only mode.** |
+| `provider` | `ac-freedom` / `aux-home` | `ac-freedom` | Cloud service. `aux-home` is experimental and EU-only; omit this option to retain AC Freedom compatibility. |
 | `region` | `eu` / `usa` / `cn` | `eu` | AUX Cloud region |
 | `controlStrategy` | `cloud-only` / `local-first` | `cloud-only` | Global command routing strategy |
 | `localControlEnabled` | boolean | `false` | Enable LAN control and UDP discovery |
