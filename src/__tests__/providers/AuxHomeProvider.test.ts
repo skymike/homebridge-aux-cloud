@@ -443,6 +443,82 @@ describe('AuxHomeProvider', () => {
     expect(mqttThree.close).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private-');
   });
+
+  test('close rejects every waiter while replacement MQTT is awaiting connection', async () => {
+    const restClient = new FakeRestClient();
+    const mqttOne = new FakeMqttSession();
+    const mqttTwo = new FakeMqttSession();
+    let replacementConnectingResolve!: () => void;
+    const replacementConnecting = new Promise<void>((resolve) => { replacementConnectingResolve = resolve; });
+    mqttTwo.connect.mockImplementation(() => replacementConnectingResolve());
+    restClient.login
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-one' })
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-two' });
+    restClient.listDevices.mockResolvedValue([deviceRecord()]);
+    const provider = new AuxHomeProvider({
+      restClient,
+      mqttSessionFactory: jest.fn().mockReturnValueOnce(mqttOne).mockReturnValueOnce(mqttTwo),
+    });
+    await provider.ensureLoggedIn('private-account', 'private-password');
+    const [device] = await provider.listDevices();
+    mqttOne.emitAuthenticationFailure();
+    await replacementConnecting;
+
+    const results = [
+      provider.ensureLoggedIn('private-account', 'private-password'),
+      provider.listDevices(),
+      provider.setDeviceParams(device, { pwr: 1 }),
+    ].map((promise) => promise.then(() => 'resolved', (error: Error) => error.message));
+    await provider.close();
+
+    await expect(Promise.all(results)).resolves.toEqual([
+      'AUX Home provider closed',
+      'AUX Home provider closed',
+      'AUX Home provider closed',
+    ]);
+    mqttTwo.emitConnected();
+    await expect(provider.listDevices()).rejects.toThrow('AUX Home session is not authenticated');
+    expect(mqttTwo.close).toHaveBeenCalledTimes(1);
+    expect(restClient.login).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(await Promise.all(results))).not.toContain('private-');
+  });
+
+  test('invalidate rejects recovery waiters and permits one explicit fresh login', async () => {
+    const restClient = new FakeRestClient();
+    const mqttOne = new FakeMqttSession();
+    const mqttTwo = new FakeMqttSession();
+    const mqttThree = new FakeMqttSession();
+    let replacementConnectingResolve!: () => void;
+    const replacementConnecting = new Promise<void>((resolve) => { replacementConnectingResolve = resolve; });
+    mqttTwo.connect.mockImplementation(() => replacementConnectingResolve());
+    restClient.login
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-one' })
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-two' })
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-three' });
+    restClient.listDevices.mockResolvedValue([deviceRecord()]);
+    const provider = new AuxHomeProvider({
+      restClient,
+      mqttSessionFactory: jest.fn()
+        .mockReturnValueOnce(mqttOne)
+        .mockReturnValueOnce(mqttTwo)
+        .mockReturnValueOnce(mqttThree),
+    });
+    await provider.ensureLoggedIn('private-account', 'private-password');
+    await provider.listDevices();
+    mqttOne.emitAuthenticationFailure();
+    await replacementConnecting;
+    const waiting = provider.ensureLoggedIn('private-account', 'private-password')
+      .then(() => 'resolved', (error: Error) => error.message);
+
+    provider.invalidateSession();
+
+    await expect(waiting).resolves.toBe('AUX Home session was invalidated');
+    mqttTwo.emitConnected();
+    await expect(provider.ensureLoggedIn('private-account', 'private-password')).resolves.toBeUndefined();
+    expect(restClient.login).toHaveBeenCalledTimes(3);
+    expect(mqttTwo.close).toHaveBeenCalledTimes(1);
+    expect(mqttThree.close).not.toHaveBeenCalled();
+  });
 });
 
 describe('createProvider AUX Home selection', () => {

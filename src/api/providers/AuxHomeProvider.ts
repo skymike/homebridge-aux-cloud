@@ -32,7 +32,7 @@ interface AuxHomeMqttConnection {
   publish(deviceId: string, payload: Buffer | string): void;
   onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void;
   onAuthenticationFailure?(listener: (error: Error) => void): () => void;
-  onConnected?(listener: () => void): () => void;
+  onConnected(listener: () => void): () => void;
   isConnected(): boolean;
   close(): void;
 }
@@ -230,7 +230,7 @@ export class AuxHomeProvider implements AuxProvider {
     this.mqtt = mqtt;
     this.unsubscribeMqtt = mqtt.onMessage((message) => this.handleMessage(message));
     this.unsubscribeMqttAuth = mqtt.onAuthenticationFailure?.(() => this.handleAuthenticationFailure(mqtt));
-    this.unsubscribeMqttConnected = mqtt.onConnected?.(() => this.handleConnected(mqtt));
+    this.unsubscribeMqttConnected = mqtt.onConnected(() => this.handleConnected(mqtt));
     return mqtt;
   }
 
@@ -396,6 +396,10 @@ export class AuxHomeProvider implements AuxProvider {
   }
 
   private clearRuntimeState(error: Error, clearListeners: boolean): void {
+    const rejectRecoveryConnection = this.recoveryConnectedReject;
+    this.recoveryConnectedResolve = undefined;
+    this.recoveryConnectedReject = undefined;
+    rejectRecoveryConnection?.(error);
     for (const deviceId of [...this.pendingCommands.keys()]) {
       this.rejectPending(deviceId, error);
     }
