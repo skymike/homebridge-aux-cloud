@@ -4,6 +4,7 @@ import {
   type AuxHomeMqttConnectOptions,
   buildMqttCredentials,
   commandTopic,
+  isAcceptedAuxHomeBrokerCertificate,
   stateTopic,
 } from '../../api/auxhome/AuxHomeMqttSession';
 
@@ -62,10 +63,18 @@ function createConnector(): {
 describe('AUX Home MQTT identity and topics', () => {
   test('builds the application MQTT credentials', () => {
     expect(buildMqttCredentials('uid123', 'token456')).toEqual({
-      clientId: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
-      username: 'usruid123',
+      clientId: 'usruid123',
+      username: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
       password: 'token456',
     });
+  });
+
+  test('accepts only the pinned AUX Home broker certificate', () => {
+    expect(isAcceptedAuxHomeBrokerCertificate(
+      'C5:30:CF:7E:53:C8:F5:71:AF:AD:95:C5:DA:40:16:D9:C3:8F:CF:12:D1:85:0B:EF:49:4E:52:D0:CB:84:D9:B2',
+    )).toBe(true);
+    expect(isAcceptedAuxHomeBrokerCertificate('00:11:22')).toBe(false);
+    expect(isAcceptedAuxHomeBrokerCertificate(undefined)).toBe(false);
   });
 
   test('builds the state and command topics for a device', () => {
@@ -89,11 +98,14 @@ describe('AuxHomeMqttSession', () => {
     expect(calls).toEqual([{
       url: 'mqtts://eu-smthome-m2m.aux-global.com:8883',
       options: {
-        clientId: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
-        username: 'usruid123',
+        clientId: 'usruid123',
+        username: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
         password: 'token456',
         clean: true,
-        rejectUnauthorized: true,
+        keepalive: 120,
+        protocolId: 'MQIsdp',
+        protocolVersion: 3,
+        rejectUnauthorized: false,
         reconnectPeriod: 0,
       },
     }]);
