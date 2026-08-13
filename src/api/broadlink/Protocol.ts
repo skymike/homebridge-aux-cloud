@@ -181,6 +181,14 @@ function commandPayloadChecksum(data: Buffer): number {
 }
 
 /**
+ * Append the two-byte AC command checksum to a 23-byte AC command body.
+ */
+export function appendCommandPayloadChecksum(body: Buffer): Buffer {
+  const crc = commandPayloadChecksum(body);
+  return Buffer.concat([body, Buffer.from([(crc >> 8) & 0xff, crc & 0xff])]);
+}
+
+/**
  * Encrypt payload with AES-128-CBC (zero padding, no auto padding).
  */
 export function encryptPayload(payload: Buffer): Buffer {
@@ -282,9 +290,7 @@ export function buildPacket(
  * Build a command payload for AC control (power, temp, mode, fan, swing, etc).
  * Based on the updateModel method from broadlink-aircon-api.
  */
-export function buildCommandPayload(
-  params: Record<string, number>,
-): Buffer {
+function buildAcCommandBody(params: Record<string, number>): Buffer {
   const power = params['pwr'] ?? 0;
   const temp = params['temp'] ?? 24;
   // Translate AUX cloud mode → Broadlink wire mode
@@ -302,6 +308,7 @@ export function buildCommandPayload(
   const clean = params['ac_clean'] ?? 0;
   const display = params['scrdisp'] ?? 0;
   const mildew = params['mldprf'] ?? 0;
+  const eco = params['eco'] ?? 0;
 
   // Temperature encoding: actual temp - 8, stored in bits 3-7
   let temperature = temp - 8;
@@ -335,22 +342,31 @@ export function buildCommandPayload(
   payload[15] = (mode & 0x0f) << 5 | (params['ac_slp'] ?? 0) << 2;
   payload[16] = 0x00;
   payload[17] = 0x00;
-  // Byte 18: power (bits 0-4) | health (bit 1) | clean (bit 2)
-  payload[18] = (power & 0x01) << 5 | (health & 0x01) << 1 | (clean & 0x01) << 2;
+  // Byte 18: power (bit 5) | ECO (bit 4) | health (bit 1) | clean (bit 2)
+  payload[18] = (power & 0x01) << 5 | (eco & 0x01) << 4 | (health & 0x01) << 1 | (clean & 0x01) << 2;
   payload[19] = 0x00;
   // Byte 20: display (bit 4) | mildew (bits 3-4)
   payload[20] = (display & 0x01) << 4 | (mildew & 0x01) << 3;
   payload[21] = 0x00;
   payload[22] = 0x00;
 
+  return payload;
+}
+
+/**
+ * Build a command payload for AC control (power, temp, mode, fan, swing, etc).
+ * Based on the updateModel method from broadlink-aircon-api.
+ */
+export function buildCommandPayload(
+  params: Record<string, number>,
+): Buffer {
+  const payload = buildAcCommandBody(params);
   const length = payload.length;
   const requestPayload = Buffer.alloc(32, 0);
   requestPayload[0] = length + 2;
   payload.copy(requestPayload, 2);
 
-  const crc = commandPayloadChecksum(payload);
-  requestPayload[length + 2] = (crc >> 8) & 0xff;
-  requestPayload[length + 3] = crc & 0xff;
+  appendCommandPayloadChecksum(payload).copy(requestPayload, length + 2, length, length + 2);
 
   return requestPayload;
 }
