@@ -198,6 +198,34 @@ describe('AuxHomeProvider', () => {
     expect(mqtt.publish).not.toHaveBeenCalled();
   });
 
+  test('preserves the latest pushed params across repeated REST device listings', async () => {
+    const { mqtt, provider, restClient } = setup();
+    const [device] = await discover(provider, mqtt);
+    mqtt.emit(POWER_ON_25C);
+    restClient.listDevices.mockResolvedValue([deviceRecord({
+      status: { pwr: 0, temp: 240, ac_mode: 1, ac_mark: 0 },
+    })]);
+
+    await provider.listDevices();
+
+    await expect(provider.refreshDeviceParams(device)).resolves.toMatchObject({
+      pwr: 1,
+      temp: 250,
+      ac_mode: 0,
+    });
+
+    mqtt.publish.mockClear();
+    const partialCommand = provider.setDeviceParams(device, { scrdisp: 1 });
+    expect(mqtt.publish).toHaveBeenCalledWith(
+      DEVICE_ID,
+      Buffer.from('bb00068000000f00010188000fa000200000200010000066bd', 'hex'),
+    );
+    const displayOn = Buffer.from(POWER_ON_25C);
+    displayOn[20] |= 0x10;
+    mqtt.emit(displayOn);
+    await expect(partialCommand).resolves.toBeUndefined();
+  });
+
   test('invalidateSession and close reject pending work, clear state, unsubscribe, and close MQTT', async () => {
     jest.useFakeTimers();
     const { mqtt, provider, restClient } = setup(5_000);

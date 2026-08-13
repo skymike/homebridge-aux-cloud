@@ -51,6 +51,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     { sequence: number; timestamp: number; expectedState: number }
   >();
 
+  private readonly pendingCompletionTimers = new Map<string, NodeJS.Timeout>();
+
   private isSyncing = false;
 
   // Cache last known cloud devices for resilience when cloud is unreachable
@@ -435,8 +437,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     // Register all accessories fresh
     for (const acc of accessories) {
       await this.api.matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [acc]);
-      const uuid = (acc as { UUID: string }).UUID;
-      this.log.info('[Matter] "%s" registered fresh (UUID: %s)', deviceName, uuid);
+      this.log.info('[Matter] "%s" registered fresh', deviceName);
     }
   }
 
@@ -489,7 +490,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log.error('Failed to control %s: %s. Params: %o', device.endpointId, message, params);
+      this.log.error('Failed to control AUX cloud device: %s', message);
       throw new AuxApiError(message);
     }
   }
@@ -546,6 +547,23 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
    */
   public completePendingCommand(endpointId: string): void {
     this.pendingCommands.delete(endpointId);
+    const timer = this.pendingCompletionTimers.get(endpointId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingCompletionTimers.delete(endpointId);
+    }
+  }
+
+  public schedulePendingCommandCompletion(endpointId: string, delayMs: number): void {
+    const existing = this.pendingCompletionTimers.get(endpointId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.pendingCompletionTimers.delete(endpointId);
+      this.completePendingCommand(endpointId);
+    }, delayMs);
+    this.pendingCompletionTimers.set(endpointId, timer);
   }
 
   /**
@@ -647,6 +665,10 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       this.refreshDebounce = undefined;
     }
     this.pendingCommands.clear();
+    for (const timer of this.pendingCompletionTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingCompletionTimers.clear();
     void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
 
     const accessories = this.matterAccessories.flatMap((accessory) => [

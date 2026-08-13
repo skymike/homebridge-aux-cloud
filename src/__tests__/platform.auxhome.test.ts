@@ -137,7 +137,8 @@ describe('AuxCloudPlatform AUX Home push integration', () => {
     const { api, internals, platform, provider } = makePlatformHarness();
     await internals.initialize();
     platform.requestRefresh(500);
-    expect(jest.getTimerCount()).toBe(2);
+    platform.schedulePendingCommandCompletion(ENDPOINT_ID, 5_000);
+    expect(jest.getTimerCount()).toBe(3);
 
     platform.onPlatformUnload();
 
@@ -179,6 +180,12 @@ describe('active proxy platform AUX Home push integration', () => {
     expect(base.provider.listDevices).toHaveBeenCalledTimes(1);
     expect(hap.getDevice(ENDPOINT_ID)?.params).toMatchObject({ pwr: 1, temp: 255 });
     expect(handler.updateAccessory).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify((base.platform.log.info as jest.Mock).mock.calls)).not.toContain(ENDPOINT_ID);
+
+    base.provider.setDeviceParams.mockRejectedValue(new Error('synthetic transport failure'));
+    await expect(hap.sendDeviceParamsWithRetry(makeDevice(), { pwr: 1 }, 0))
+      .rejects.toThrow('Failed to control AUX cloud device after 1 cloud attempts');
+    expect(JSON.stringify((base.platform.log.error as jest.Mock).mock.calls)).not.toContain(ENDPOINT_ID);
     hap.onPlatformUnload();
     expect(base.provider.close).toHaveBeenCalledTimes(1);
     expect(jest.getTimerCount()).toBe(0);
@@ -210,6 +217,7 @@ describe('active proxy platform AUX Home push integration', () => {
     expect(base.provider.listDevices).toHaveBeenCalledTimes(1);
     expect(matter.getDevice(ENDPOINT_ID)?.params).toMatchObject({ pwr: 1, temp: 255 });
     expect(updateAccessoryState).toHaveBeenCalled();
+    expect(JSON.stringify((base.platform.log.info as jest.Mock).mock.calls)).not.toContain(ENDPOINT_ID);
     matter.onPlatformUnload();
     expect(base.provider.close).toHaveBeenCalledTimes(1);
     expect(jest.getTimerCount()).toBe(0);
@@ -225,7 +233,10 @@ describe('active proxy platform AUX Home push integration', () => {
       matterPlatform: { onPlatformUnload: matterUnload },
     });
 
-    proxy.onPlatformUnload();
+    const shutdownRegistration = (base.api.on as jest.Mock).mock.calls.find(([event]) => event === 'shutdown');
+    expect(shutdownRegistration).toBeDefined();
+    shutdownRegistration[1]();
+    shutdownRegistration[1]();
 
     expect(hapUnload).toHaveBeenCalledTimes(1);
     expect(matterUnload).toHaveBeenCalledTimes(1);

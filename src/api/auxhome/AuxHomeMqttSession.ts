@@ -85,9 +85,17 @@ export class AuxHomeMqttSession {
   }
 
   public connect(devices: readonly AuxHomeMqttDevice[]): void {
-    this.devices = [...new Set(devices.map((device) => device.did).filter((deviceId) => deviceId.length > 0))];
+    const nextDevices = [...new Set(devices.map((device) => device.did).filter((deviceId) => deviceId.length > 0))];
+    const existingDevices = new Set(this.devices);
+    const addedDevices = nextDevices.filter((deviceId) => !existingDevices.has(deviceId));
+    this.devices = nextDevices;
     this.closed = false;
     if (this.client || this.reconnectTimer) {
+      if (this.connected && this.client) {
+        for (const deviceId of addedDevices) {
+          this.client.subscribe(stateTopic(deviceId));
+        }
+      }
       return;
     }
     this.beginConnection();

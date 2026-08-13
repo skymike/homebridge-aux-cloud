@@ -78,7 +78,7 @@ describe('AuxCloudPlatform.registerMatterAccessoriesInternal', () => {
 
     await callRegisterMatterInternal(ctx, [{ UUID: 'test-uuid' }], 'Aire Sala');
 
-    expect(ctx.log.info).toHaveBeenCalledWith('[Matter] "%s" registered fresh (UUID: %s)', 'Aire Sala', 'test-uuid');
+    expect(ctx.log.info).toHaveBeenCalledWith('[Matter] "%s" registered fresh', 'Aire Sala');
    });
 
   test('processes multiple accessories independently', async () => {

@@ -179,6 +179,18 @@ describe('AuxHomeMqttSession', () => {
     expect(clients[0].publications).toEqual([{ topic: 'app2dev/did1', payload }]);
   });
 
+  test('subscribes a newly discovered device without waiting for reconnect', () => {
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
+    session.connect([{ did: 'did1' }]);
+    clients[0].emit('connect');
+
+    session.connect([{ did: 'did1' }, { did: 'did2' }]);
+
+    expect(clients).toHaveLength(1);
+    expect(clients[0].subscriptions).toEqual(['dev2app/did1/#', 'dev2app/did2/#']);
+  });
+
   test('close cancels a pending reconnect and prevents future reconnects', () => {
     jest.useFakeTimers();
     const { clients, connector } = createConnector();

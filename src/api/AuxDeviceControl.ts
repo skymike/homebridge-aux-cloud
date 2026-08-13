@@ -365,7 +365,7 @@ export class AuxDeviceControl {
       }
     }
 
-    const message = `Failed to control ${device.endpointId} after ${attempts} cloud attempts`;
+    const message = `Failed to control AUX cloud device after ${attempts} cloud attempts`;
     throw new Error(message);
   }
 

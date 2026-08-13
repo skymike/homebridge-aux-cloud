@@ -68,6 +68,8 @@ export class AuxHomeProvider implements AuxProvider {
 
   private readonly devices = new Map<string, AuxDevice>();
 
+  private readonly pushedStates = new Map<string, Pick<AuxDevice, 'params' | 'lastUpdated'>>();
+
   private readonly listeners = new Set<AuxProviderStateListener>();
 
   private readonly pendingCommands = new Map<string, PendingCommand>();
@@ -102,10 +104,22 @@ export class AuxHomeProvider implements AuxProvider {
 
     const devices = records.map((record) => {
       const device = this.normalizeDevice(record);
+      const pushed = this.pushedStates.get(record.did);
+      if (pushed) {
+        device.params = { ...device.params, ...pushed.params };
+        device.lastUpdated = pushed.lastUpdated;
+      }
       this.deviceRecords.set(record.did, { ...record });
       this.devices.set(record.did, device);
       return { ...device, params: { ...device.params } };
     });
+
+    const listedIds = new Set(records.map(({ did }) => did));
+    for (const deviceId of this.pushedStates.keys()) {
+      if (!listedIds.has(deviceId)) {
+        this.pushedStates.delete(deviceId);
+      }
+    }
 
     this.mqtt.connect(records.map(({ did }) => ({ did })));
     return devices;
@@ -183,6 +197,10 @@ export class AuxHomeProvider implements AuxProvider {
       lastUpdated: this.now().toISOString(),
     };
     this.devices.set(message.deviceId, updated);
+    this.pushedStates.set(message.deviceId, {
+      params: { ...updated.params },
+      lastUpdated: updated.lastUpdated,
+    });
 
     const pending = this.pendingCommands.get(message.deviceId);
     if (pending && this.matchesExpected(updated.params, pending.expected)) {
@@ -253,6 +271,7 @@ export class AuxHomeProvider implements AuxProvider {
     this.session = undefined;
     this.deviceRecords.clear();
     this.devices.clear();
+    this.pushedStates.clear();
     if (clearListeners) {
       this.listeners.clear();
     }

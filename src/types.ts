@@ -69,6 +69,7 @@ export interface IAuxCloudPlatform {
   readonly commandRetryCount: number;
   registerPendingCommand(endpointId: string): number | null;
   completePendingCommand(endpointId: string): void;
+  schedulePendingCommandCompletion(endpointId: string, delayMs: number): void;
   isStaleState(endpointId: string): boolean;
   startDeviceCommand(device: AuxDevice, params: Record<string, number>, retryCount?: number): void;
   getDevice(endpointId: string): AuxDevice | undefined;

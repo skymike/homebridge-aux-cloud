@@ -89,7 +89,7 @@ export class MatterThermostatAccessory {
     this.device = device;
     this.endpointId = device.endpointId;
 
-    this.log.info(`[Matter] Initialized Thermostat for "${device.friendlyName}" (${this.endpointId})`);
+    this.log.info('[Matter] Initialized Thermostat for "%s"', device.friendlyName);
   }
 
   /**
@@ -466,7 +466,7 @@ export class MatterThermostatAccessory {
     this.platform.startDeviceCommand(this.device, payload);
     if (seq !== null) {
       const guardMs = this.platform.commandTimeoutMs * (this.platform.commandRetryCount + 1) + 3000;
-      setTimeout(() => this.platform.completePendingCommand(endpointId), guardMs);
+      this.platform.schedulePendingCommandCompletion(endpointId, guardMs);
     }
   }
 

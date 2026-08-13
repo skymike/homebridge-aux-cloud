@@ -13,6 +13,7 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
   private inner?: InitializablePlatform;
   private matterPlatform?: AuxCloudMatterPlatform;
   private readonly bufferedAccessories: PlatformAccessory[] = [];
+  private unloaded = false;
 
   constructor(
     private readonly log: Logger,
@@ -20,6 +21,7 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
     private readonly api: API,
   ) {
     this.api.on('didFinishLaunching', () => { void this.onDidFinishLaunching(); });
+    this.api.on('shutdown', () => this.onPlatformUnload());
   }
 
   private replayBufferedToInner(): void {
@@ -100,6 +102,10 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
   }
 
   public onPlatformUnload(): void {
+    if (this.unloaded) {
+      return;
+    }
+    this.unloaded = true;
     this.inner?.onPlatformUnload?.();
     this.matterPlatform?.onPlatformUnload();
   }
