@@ -511,10 +511,11 @@ describe('AuxHomeProvider', () => {
       .then(() => 'resolved', (error: Error) => error.message);
 
     provider.invalidateSession();
+    const freshLogin = provider.ensureLoggedIn('private-account', 'private-password');
 
     await expect(waiting).resolves.toBe('AUX Home session was invalidated');
     mqttTwo.emitConnected();
-    await expect(provider.ensureLoggedIn('private-account', 'private-password')).resolves.toBeUndefined();
+    await expect(freshLogin).resolves.toBeUndefined();
     expect(restClient.login).toHaveBeenCalledTimes(3);
     expect(mqttTwo.close).toHaveBeenCalledTimes(1);
     expect(mqttThree.close).not.toHaveBeenCalled();

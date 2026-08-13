@@ -399,6 +399,7 @@ export class AuxHomeProvider implements AuxProvider {
     const rejectRecoveryConnection = this.recoveryConnectedReject;
     this.recoveryConnectedResolve = undefined;
     this.recoveryConnectedReject = undefined;
+    this.authenticationOperation = undefined;
     rejectRecoveryConnection?.(error);
     for (const deviceId of [...this.pendingCommands.keys()]) {
       this.rejectPending(deviceId, error);
