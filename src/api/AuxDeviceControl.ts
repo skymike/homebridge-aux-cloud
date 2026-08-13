@@ -6,7 +6,9 @@
 import { createSocket } from 'dgram';
 import type { Logger } from 'homebridge';
 
-import { AuxCloudClient, type AuxDevice } from './AuxCloudClient';
+import type { AuxDevice } from './AuxCloudClient';
+import { AcFreedomProvider } from './providers/AcFreedomProvider';
+import { AuxProviderCommandSupersededError, type AuxProvider } from './providers/AuxProvider';
 import { AC_POWER } from './constants';
 import type { DiscoveredDevice } from './broadlink/DeviceDiscovery';
 import {
@@ -34,7 +36,7 @@ export interface AuxDeviceControlOptions {
   commandRetryCount?: number;
   localControlEnabled?: boolean;
   devices?: DeviceMapping[];
-  cloudClient?: AuxCloudClient;
+  cloudProvider?: Pick<AuxProvider, 'kind' | 'setDeviceParams'>;
 }
 
 const LAN_FAILURE_THRESHOLD = 3;
@@ -52,7 +54,8 @@ interface LanSession {
 }
 
 export class AuxDeviceControl {
-  private client: AuxCloudClient;
+  private cloudProvider: Pick<AuxProvider, 'kind' | 'setDeviceParams'>;
+  private readonly redactDeviceIdentifiers: boolean;
   private deviceMappings = new Map<string, DeviceMapping>(); // keyed by normalized MAC
   private discoveredDevices = new Map<string, DiscoveredDevice>(); // keyed by normalized MAC
   private consecutiveFailures = new Map<string, number>();
@@ -60,12 +63,13 @@ export class AuxDeviceControl {
   private logger?: Logger;
 
   constructor(options: AuxDeviceControlOptions) {
-    this.logger = options.logger;
-    this.client = options.cloudClient ?? new AuxCloudClient({
+    this.cloudProvider = options.cloudProvider ?? new AcFreedomProvider({
       region: options.region ?? 'eu',
       logger: options.logger,
       requestTimeoutMs: options.commandTimeoutMs ?? 5000,
     });
+    this.redactDeviceIdentifiers = this.cloudProvider.kind === 'aux-home';
+    this.logger = this.redactDeviceIdentifiers ? undefined : options.logger;
     this.loadMappings(options.devices ?? []);
   }
 
@@ -284,7 +288,7 @@ export class AuxDeviceControl {
 
       if (authMsg === null) {
       this.logger?.warn('[LAN] Auth timeout for %s — no response in 5s', ip);
-      throw new Error(`LAN auth timeout for ${ip}`);
+      throw new Error(this.redactDeviceIdentifiers ? 'LAN auth timeout for AUX Home device' : `LAN auth timeout for ${ip}`);
     }
     this.logger?.warn('[LAN] Auth OK for %s', ip);
 
@@ -337,7 +341,9 @@ export class AuxDeviceControl {
       this.logger?.warn('[LAN] Sending command to %s: %j', ip, normalizedParams);
       return;
     }
-    throw new Error(`LAN command failed for ${ip} after ${LAN_RECONNECT_RETRY + 1} attempts`);
+    throw new Error(this.redactDeviceIdentifiers
+      ? `LAN command failed for AUX Home device after ${LAN_RECONNECT_RETRY + 1} attempts`
+      : `LAN command failed for ${ip} after ${LAN_RECONNECT_RETRY + 1} attempts`);
   }
 
 
@@ -353,9 +359,12 @@ export class AuxDeviceControl {
 
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        await this.client.setDeviceParams(device, params);
+        await this.cloudProvider.setDeviceParams(device, params);
         return;
       } catch (error) {
+        if (error instanceof AuxProviderCommandSupersededError) {
+          throw error;
+        }
         if (attempt < retryCount) {
           const delayMs = Math.min(500 * Math.pow(2, attempt), 3000);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -363,7 +372,9 @@ export class AuxDeviceControl {
       }
     }
 
-    const message = `Failed to control ${device.endpointId} after ${attempts} cloud attempts`;
+    const message = this.redactDeviceIdentifiers
+      ? `Failed to control AUX Home device after ${attempts} cloud attempts`
+      : `Failed to control ${device.endpointId} after ${attempts} cloud attempts`;
     throw new Error(message);
   }
 
@@ -409,10 +420,14 @@ export class AuxDeviceControl {
         this.recordFailure(endpointId);
         const failures = this.consecutiveFailures.get(endpointId) ?? 0;
         if (deviceStrategy === 'local') {
-          throw new Error(`LAN command failed for ${endpointId} (device is local-only, no cloud fallback)`);
+          throw new Error(this.redactDeviceIdentifiers
+            ? 'LAN command failed for AUX Home device (device is local-only, no cloud fallback)'
+            : `LAN command failed for ${endpointId} (device is local-only, no cloud fallback)`);
         }
         if (failures < LAN_FAILURE_THRESHOLD) {
-          throw new Error(`LAN command failed for ${endpointId} (attempt ${failures}/${LAN_FAILURE_THRESHOLD})`);
+          throw new Error(this.redactDeviceIdentifiers
+            ? `LAN command failed for AUX Home device (attempt ${failures}/${LAN_FAILURE_THRESHOLD})`
+            : `LAN command failed for ${endpointId} (attempt ${failures}/${LAN_FAILURE_THRESHOLD})`);
         }
         this.logger?.debug('LAN failed %d times for %s, falling back to cloud', failures, endpointId);
         await this.sendCloudCommand(device, params, options?.cloudRetryCount ?? 2);

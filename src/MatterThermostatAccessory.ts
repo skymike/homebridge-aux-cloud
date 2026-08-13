@@ -89,7 +89,11 @@ export class MatterThermostatAccessory {
     this.device = device;
     this.endpointId = device.endpointId;
 
-    this.log.info(`[Matter] Initialized Thermostat for "${device.friendlyName}" (${this.endpointId})`);
+    if (this.platform.redactDeviceIdentifiers) {
+      this.log.info('[Matter] Initialized Thermostat for "%s"', device.friendlyName);
+    } else {
+      this.log.info(`[Matter] Initialized Thermostat for "${device.friendlyName}" (${this.endpointId})`);
+    }
   }
 
   /**
@@ -466,7 +470,7 @@ export class MatterThermostatAccessory {
     this.platform.startDeviceCommand(this.device, payload);
     if (seq !== null) {
       const guardMs = this.platform.commandTimeoutMs * (this.platform.commandRetryCount + 1) + 3000;
-      setTimeout(() => this.platform.completePendingCommand(endpointId), guardMs);
+      this.platform.schedulePendingCommandCompletion(endpointId, guardMs);
     }
   }
 
@@ -499,7 +503,11 @@ export class MatterThermostatAccessory {
           percentCurrent: this.getMatterFanPercent(),
         }).catch((e: unknown) => {
           const msg = e instanceof Error ? e.message : String(e);
-          this.log.debug(`[Matter][${this.device?.friendlyName}] fanControl refresh error: ${msg}`);
+          if (this.platform.redactDeviceIdentifiers) {
+            this.log.debug(`[Matter][${this.device?.friendlyName}] fanControl refresh failed`);
+          } else {
+            this.log.debug(`[Matter][${this.device?.friendlyName}] fanControl refresh error: ${msg}`);
+          }
         });
 
         // Update switch states — each switch is registered as an independent accessory
@@ -515,7 +523,11 @@ export class MatterThermostatAccessory {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log.debug(`[Matter][${this.device.friendlyName}] Refresh error: ${message}`);
+      if (this.platform.redactDeviceIdentifiers) {
+        this.log.debug(`[Matter][${this.device.friendlyName}] Refresh failed`);
+      } else {
+        this.log.debug(`[Matter][${this.device.friendlyName}] Refresh error: ${message}`);
+      }
     }
   }
 

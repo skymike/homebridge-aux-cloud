@@ -44,7 +44,7 @@ function makeContext(opts: {
     config: {
       localControlEnabled: opts.localControlEnabled ?? false,
     },
-    client: {
+    provider: {
       ensureLoggedIn: jest.fn().mockResolvedValue(undefined),
       listDevices: opts.listDevices ?? jest.fn().mockResolvedValue([]),
       invalidateSession: jest.fn(),

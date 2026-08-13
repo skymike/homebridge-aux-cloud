@@ -461,9 +461,7 @@ export class AuxCloudPlatformAccessory {
     if (seq !== null) {
       const endpointId = this.device.endpointId;
       const guardMs = this.platform.commandTimeoutMs * (this.platform.commandRetryCount + 1) + 3000;
-      setTimeout(() => {
-        this.platform.completePendingCommand(endpointId);
-      }, guardMs);
+      this.platform.schedulePendingCommandCompletion(endpointId, guardMs);
     }
   }
 
@@ -504,9 +502,7 @@ export class AuxCloudPlatformAccessory {
       if (seq !== null) {
         const endpointId = this.device.endpointId;
         const guardMs = this.platform.commandTimeoutMs * (this.platform.commandRetryCount + 1) + 3000;
-        setTimeout(() => {
-          this.platform.completePendingCommand(endpointId);
-        }, guardMs);
+        this.platform.schedulePendingCommandCompletion(endpointId, guardMs);
       }
 
       this.platform.startDeviceCommand(this.device, AC_POWER_ON);
@@ -742,9 +738,7 @@ export class AuxCloudPlatformAccessory {
     if (seq !== null) {
       const endpointId = this.device.endpointId;
       const guardMs = this.platform.commandTimeoutMs * (this.platform.commandRetryCount + 1) + 3000;
-      setTimeout(() => {
-        this.platform.completePendingCommand(endpointId);
-      }, guardMs);
+      this.platform.schedulePendingCommandCompletion(endpointId, guardMs);
     }
   }
 

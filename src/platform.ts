@@ -8,11 +8,14 @@ import type {
   Service,
 } from 'homebridge';
 
-import { AuxApiError, AuxCloudClient, type AuxDevice } from './api/AuxCloudClient';
+import { AuxApiError, type AuxDevice } from './api/AuxCloudClient';
 import { AuxDeviceControl } from './api/AuxDeviceControl';
+import { createProvider } from './api/providers/createProvider';
+import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
 import { MatterThermostatAccessory } from './MatterThermostatAccessory';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
+import type { AuxCloudPlatformDependencies } from './types';
 
 export type FeatureSwitchKey =
    | 'screenDisplay'
@@ -32,6 +35,7 @@ const ALLOWED_FEATURE_SWITCHES: FeatureSwitchKey[] = [
 ];
 
 export interface AuxCloudPlatformConfig extends PlatformConfig {
+  provider?: AuxProviderKind;
   username?: string;
   password?: string;
   region?: 'eu' | 'usa' | 'cn';
@@ -75,7 +79,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
 
   private readonly config: AuxCloudPlatformConfig;
 
-  private readonly client: AuxCloudClient;
+  private readonly provider: AuxProvider;
 
   private readonly deviceControl: AuxDeviceControl;
 
@@ -93,6 +97,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
 
   public readonly commandRetryCount: number;
   public readonly commandTimeoutMs: number;
+  public readonly redactDeviceIdentifiers: boolean;
   public readonly enableHomeKit: boolean;
 
   private readonly handlers = new Map<string, AuxCloudPlatformAccessory>();
@@ -105,12 +110,18 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
      { sequence: number; timestamp: number; expectedState: number }
    >();
 
+  private readonly pendingCompletionTimers = new Map<string, NodeJS.Timeout>();
+
   private isSyncing = false;
 
   // Cache last known cloud devices for resilience when cloud is unreachable
   private lastKnownCloudDevices: AuxDevice[] = [];
 
   private refreshDebounce?: NodeJS.Timeout;
+
+  private pollInterval?: NodeJS.Timeout;
+
+  private unsubscribeProvider?: () => void;
 
     // Matter accessory instances
   private readonly matterAccessories: MatterThermostatAccessory[] = [];
@@ -120,6 +131,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
     public readonly log: Logger,
     config: PlatformConfig,
     public readonly api: API,
+    dependencies: AuxCloudPlatformDependencies = {},
    ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
@@ -157,12 +169,15 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         ? Math.max(1000, Math.min(15000, this.config.commandTimeoutMs))
         : 5000;
 
-     // Create the client with custom timeout
-    this.client = new AuxCloudClient({
+     // Create the cloud provider with custom timeout
+    const providerFactory = dependencies.providerFactory ?? createProvider;
+    this.provider = providerFactory({
+      provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
       requestTimeoutMs: this.commandTimeoutMs,
      });
+    this.redactDeviceIdentifiers = this.provider.kind === 'aux-home';
 
       // Device control with local/cloud selection — share the platform's logged-in client
       this.deviceControl = new AuxDeviceControl({
@@ -172,7 +187,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         commandRetryCount: this.commandRetryCount,
         localControlEnabled: this.config.localControlEnabled,
         devices: this.config.devices,
-        cloudClient: this.client,
+        cloudProvider: this.provider,
       });
 
     this.log.debug(
@@ -263,7 +278,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         ): Promise<void> {
          // Ensure cloud session is valid before sending command
         if (this.credentialsConfigured) {
-          await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
+          await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
          }
         try {
           await this.deviceControl.sendCommand(device, params, {
@@ -273,6 +288,10 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
              });
            } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
+          if (this.redactDeviceIdentifiers) {
+            this.log.error('Failed to control AUX Home device');
+            throw new AuxApiError('Failed to control AUX Home device');
+          }
           this.log.error('Failed to control %s: %s. Params: %o', device.endpointId, message, params);
           throw new AuxApiError(message);
            }
@@ -331,7 +350,24 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
     */
   public completePendingCommand(endpointId: string): void {
     this.pendingCommands.delete(endpointId);
+    const timer = this.pendingCompletionTimers.get(endpointId);
+    if (timer) {
+      clearTimeout(timer);
+      this.pendingCompletionTimers.delete(endpointId);
+    }
    }
+
+  public schedulePendingCommandCompletion(endpointId: string, delayMs: number): void {
+    const existing = this.pendingCompletionTimers.get(endpointId);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.pendingCompletionTimers.delete(endpointId);
+      this.completePendingCommand(endpointId);
+    }, delayMs);
+    this.pendingCompletionTimers.set(endpointId, timer);
+  }
 
    /**
     * Retorna true si hay un comando pendiente activo (< 4s desde el registro).
@@ -347,6 +383,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
      }
 
     this.refreshDebounce = setTimeout(() => {
+      this.refreshDebounce = undefined;
       void this.refreshDevices();
      }, delayMs);
    }
@@ -389,6 +426,8 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
   }
 
   private async initialize(): Promise<void> {
+    this.subscribeToProvider();
+
     if (this.config.localControlEnabled) {
       const { DeviceDiscovery } = await import('./api/broadlink/DeviceDiscovery');
       const devicesWithStaticIp = (this.config.devices ?? []).filter((d) => d.ip && d.mac);
@@ -399,26 +438,65 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         }
         for (const dev of discovered) {
           this.deviceControl.registerDiscoveredDevice(dev);
-          this.log.info('Discovered Broadlink device: %s (MAC: %s)', dev.ip, dev.mac);
+          if (this.redactDeviceIdentifiers) {
+            this.log.info('Discovered Broadlink device for AUX Home local control');
+          } else {
+            this.log.info('Discovered Broadlink device: %s (MAC: %s)', dev.ip, dev.mac);
+          }
         }
         if (discovered.length === 0) {
           this.log.warn('[Aux Cloud] LAN discovery found no devices via broadcast. Using static IP/MAC from config.');
         }
       } catch (error) {
         if (devicesWithStaticIp.length === 0) {
-          throw error;
+          throw this.redactDeviceIdentifiers ? new Error('AUX Home LAN discovery failed') : error;
         }
-        this.log.warn('[Aux Cloud] LAN discovery broadcast failed (%s). Using static IP/MAC from config.', error);
+        if (this.redactDeviceIdentifiers) {
+          this.log.warn('[Aux Cloud] LAN discovery broadcast failed. Using configured local device');
+        } else {
+          this.log.warn('[Aux Cloud] LAN discovery broadcast failed (%s). Using static IP/MAC from config.', error);
+        }
       }
     }
 
       await this.refreshDevices();
 
       const intervalSeconds = this.validatePollInterval(this.config.pollInterval);
-      setInterval(() => {
+      this.pollInterval = setInterval(() => {
         void this.refreshDevices();
          }, intervalSeconds * 1000);
         }
+
+  private subscribeToProvider(): void {
+    if (!this.unsubscribeProvider) {
+      this.unsubscribeProvider = this.provider.onStateChange((device) => this.applyProviderState(device));
+    }
+  }
+
+  private applyProviderState(device: AuxDevice): void {
+    const existing = this.devicesById.get(device.endpointId);
+    if (!existing) {
+      return;
+    }
+    const mergedDevice: AuxDevice = {
+      ...existing,
+      ...device,
+      params: this.mergeParams(existing.params, device.params),
+      state: device.state ?? existing.state,
+      lastUpdated: device.lastUpdated ?? existing.lastUpdated,
+    };
+    this.devicesById.set(device.endpointId, mergedDevice);
+    this.completePendingCommand(device.endpointId);
+
+    const uuid = this.api.hap.uuid.generate(device.endpointId);
+    this.handlers.get(uuid)?.updateAccessory(mergedDevice);
+    const matterAccessory = this.matterAccessories.find((candidate) => (
+      candidate.getDevice()?.endpointId === device.endpointId
+    ));
+    if (matterAccessory) {
+      void matterAccessory.refresh();
+    }
+  }
 
   private validatePollInterval(interval?: number): number {
     if (!interval || Number.isNaN(interval) || interval < 15) {
@@ -442,8 +520,8 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
       let cloudDevices: AuxDevice[] = [];
 
       try {
-        await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
-        cloudDevices = await this.client.listDevices({
+        await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
+        cloudDevices = await this.provider.listDevices({
           includeIds: this.includeIds,
           excludeIds: this.excludeIds,
         });
@@ -451,12 +529,16 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         this.log.debug('Fetched %d AUX Cloud devices', cloudDevices.length);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('Failed to fetch AUX Cloud devices: %s', message);
+        if (this.redactDeviceIdentifiers) {
+          this.log.warn('Failed to fetch AUX Home devices');
+        } else {
+          this.log.warn('Failed to fetch AUX Cloud devices: %s', message);
+        }
           // If cloud fails, use cached devices so cloud devices don't disappear as stale
         cloudDevices = this.lastKnownCloudDevices.length > 0
              ? this.lastKnownCloudDevices
              : cloudDevices; // empty (first run with no cloud)
-        this.client.invalidateSession();
+        this.provider.invalidateSession();
       }
 
       const lanOnlyDevices = this.getLanOnlyDevices();
@@ -474,11 +556,19 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
             if (localParams != null) {
               device.params = { ...device.params, ...localParams };
               device.state = 1;
-              this.log.info('[LAN] Poll OK for %s', device.endpointId)
+              if (this.redactDeviceIdentifiers) {
+                this.log.info('[LAN] AUX Home poll succeeded');
+              } else {
+                this.log.info('[LAN] Poll OK for %s', device.endpointId)
+              }
             }
           } catch {
             this.deviceControl.recordFailure(device.endpointId);
-            this.log.warn('[LAN] Poll failed for %s', device.endpointId)
+            if (this.redactDeviceIdentifiers) {
+              this.log.warn('[LAN] AUX Home poll failed');
+            } else {
+              this.log.warn('[LAN] Poll failed for %s', device.endpointId)
+            }
           }
         }));
       }
@@ -524,16 +614,21 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
       seen.add(uuid);
 
       if (!isKnownDevice) {
-        this.log.info(
-           'Discovered AUX device "%s" (endpointId: %s, productId: %s)',
-          device.friendlyName,
-          device.endpointId,
-          device.productId,
-         );
-        this.log.debug(
-           'Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure (%s)',
-          device.endpointId,
-         );
+        if (this.redactDeviceIdentifiers) {
+          this.log.info('Discovered AUX device "%s"', device.friendlyName);
+          this.log.debug('Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure');
+        } else {
+          this.log.info(
+            'Discovered AUX device "%s" (endpointId: %s, productId: %s)',
+            device.friendlyName,
+            device.endpointId,
+            device.productId,
+          );
+          this.log.debug(
+            'Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure (%s)',
+            device.endpointId,
+          );
+        }
        }
 
       const existingAccessory = this.accessories.find((accessory) => accessory.UUID === uuid);
@@ -631,8 +726,12 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
        // Register all accessories fresh
       for (const acc of accessories) {
         await this.api.matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [acc]);
-        const uuid = (acc as { UUID: string }).UUID;
-        this.log.info('[Matter] "%s" registered fresh (UUID: %s)', deviceName, uuid);
+        if (this.redactDeviceIdentifiers) {
+          this.log.info('[Matter] "%s" registered fresh', deviceName);
+        } else {
+          const uuid = (acc as { UUID: string }).UUID;
+          this.log.info('[Matter] "%s" registered fresh (UUID: %s)', deviceName, uuid);
+        }
        }
      }
 
@@ -658,7 +757,11 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
           this.log.info('[Matter] Registered "%s" (%d switches)', device.friendlyName, switches.length);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          this.log.error('[Matter] Failed to register accessory for "%s": %s', device.friendlyName, message);
+          if (this.redactDeviceIdentifiers) {
+            this.log.error('[Matter] Failed to register AUX Home accessory for "%s"', device.friendlyName);
+          } else {
+            this.log.error('[Matter] Failed to register accessory for "%s": %s', device.friendlyName, message);
+          }
         }
       }
     }
@@ -685,6 +788,22 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
 
     // DynamicPlatformPlugin hook — called when the platform is unloaded
     onPlatformUnload(): void {
+      this.unsubscribeProvider?.();
+      this.unsubscribeProvider = undefined;
+      if (this.pollInterval) {
+        clearInterval(this.pollInterval);
+        this.pollInterval = undefined;
+      }
+      if (this.refreshDebounce) {
+        clearTimeout(this.refreshDebounce);
+        this.refreshDebounce = undefined;
+      }
+      this.pendingCommands.clear();
+      for (const timer of this.pendingCompletionTimers.values()) {
+        clearTimeout(timer);
+      }
+      this.pendingCompletionTimers.clear();
+      void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
       this.unregisterMatterAccessories();
     }
 

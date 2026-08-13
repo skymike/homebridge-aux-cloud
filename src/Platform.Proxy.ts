@@ -2,23 +2,30 @@ import type { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformCon
 
 import { AuxCloudHAPPlatform } from './Platform.HAP';
 import { AuxCloudMatterPlatform } from './Platform.Matter';
-import type { AuxCloudPlatformConfig } from './types';
+import { createProvider } from './api/providers/createProvider';
+import type { AuxProvider } from './api/providers/AuxProvider';
+import type { AuxCloudPlatformConfig, AuxCloudPlatformDependencies } from './types';
 
 interface InitializablePlatform extends DynamicPlatformPlugin {
   initialize(): Promise<void>;
+  onPlatformUnload?(): void;
 }
 
 export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
   private inner?: InitializablePlatform;
   private matterPlatform?: AuxCloudMatterPlatform;
   private readonly bufferedAccessories: PlatformAccessory[] = [];
+  private unloaded = false;
+  private sharedProvider?: AuxProvider;
 
   constructor(
     private readonly log: Logger,
     private readonly config: PlatformConfig,
     private readonly api: API,
+    private readonly dependencies: AuxCloudPlatformDependencies = {},
   ) {
-    this.api.on('didFinishLaunching', () => { void this.onDidFinishLaunching(); });
+    this.api.on('didFinishLaunching', () => this.onDidFinishLaunching());
+    this.api.on('shutdown', () => this.onPlatformUnload());
   }
 
   private replayBufferedToInner(): void {
@@ -48,13 +55,28 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
       }
 
       this.log.info('[Platform] expose=both — starting HAP + Matter platforms simultaneously');
+      let childDependencies = this.dependencies;
+      if (cfg.provider === 'aux-home') {
+        const providerFactory = this.dependencies.providerFactory ?? createProvider;
+        this.sharedProvider = providerFactory({
+          provider: 'aux-home',
+          region: cfg.region ?? 'eu',
+          logger: this.log,
+          requestTimeoutMs: cfg.requestTimeoutMs ?? 5000,
+          commandTimeoutMs: cfg.commandTimeoutMs,
+        });
+        childDependencies = {
+          providerFactory: () => this.sharedProvider!,
+          closeProviderOnUnload: false,
+        };
+      }
       // HAP is the primary inner: receives cached accessories and drives configureAccessory
-      this.inner = new AuxCloudHAPPlatform(this.log, this.config, this.api);
+      this.inner = new AuxCloudHAPPlatform(this.log, this.config, this.api, childDependencies);
       this.replayBufferedToInner();
 
       // Matter is secondary: does NOT receive cached HAP accessories (keepHap implicit — cachedHapAccessories stays empty)
       try {
-        this.matterPlatform = new AuxCloudMatterPlatform(this.log, this.config, this.api);
+        this.matterPlatform = new AuxCloudMatterPlatform(this.log, this.config, this.api, childDependencies);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.log.error('[Platform] Failed to create Matter platform (%s); HAP-only fallback', msg);
@@ -95,6 +117,19 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
       this.inner.configureAccessory(accessory);
     } else {
       this.bufferedAccessories.push(accessory);
+    }
+  }
+
+  public onPlatformUnload(): void {
+    if (this.unloaded) {
+      return;
+    }
+    this.unloaded = true;
+    this.inner?.onPlatformUnload?.();
+    this.matterPlatform?.onPlatformUnload();
+    if (this.sharedProvider) {
+      void this.sharedProvider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
+      this.sharedProvider = undefined;
     }
   }
 }

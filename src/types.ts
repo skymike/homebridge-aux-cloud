@@ -1,6 +1,8 @@
 import type { API, Logger, PlatformConfig } from 'homebridge';
 
 import type { AuxDevice } from './api/AuxCloudClient';
+import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
+import type { CreateProviderOptions } from './api/providers/createProvider';
 
 export type FeatureSwitchKey =
   | 'screenDisplay'
@@ -19,7 +21,13 @@ export const ALLOWED_FEATURE_SWITCHES: FeatureSwitchKey[] = [
   'sleep',
 ];
 
+export interface AuxCloudPlatformDependencies {
+  providerFactory?: (options: CreateProviderOptions) => AuxProvider;
+  closeProviderOnUnload?: boolean;
+}
+
 export interface AuxCloudPlatformConfig extends PlatformConfig {
+  provider?: AuxProviderKind;
   username?: string;
   password?: string;
   region?: 'eu' | 'usa' | 'cn';
@@ -33,6 +41,7 @@ export interface AuxCloudPlatformConfig extends PlatformConfig {
   // Optimistic UI settings
   commandRetryCount?: number;
   commandTimeoutMs?: number;
+  requestTimeoutMs?: number;
 
   // Local (LAN) control settings
   controlStrategy?: 'local-first' | 'cloud-only';
@@ -60,8 +69,10 @@ export interface IAuxCloudPlatform {
   readonly temperatureStep: number;
   readonly commandTimeoutMs: number;
   readonly commandRetryCount: number;
+  readonly redactDeviceIdentifiers: boolean;
   registerPendingCommand(endpointId: string): number | null;
   completePendingCommand(endpointId: string): void;
+  schedulePendingCommandCompletion(endpointId: string, delayMs: number): void;
   isStaleState(endpointId: string): boolean;
   startDeviceCommand(device: AuxDevice, params: Record<string, number>, retryCount?: number): void;
   getDevice(endpointId: string): AuxDevice | undefined;

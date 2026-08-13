@@ -17,12 +17,22 @@
             "username": {
                 "title": "AUX Cloud Username",
                 "type": "string",
-                "description": "Email address or phone number registered with AUX Cloud. Not required for LAN-only mode."
+                "description": "Email address or phone number registered with AUX Cloud. Required when using the experimental AUX Home provider; not required for LAN-only mode."
             },
             "password": {
                 "title": "AUX Cloud Password",
                 "type": "string",
-                "description": "Not required for LAN-only mode."
+                "description": "Required when using the experimental AUX Home provider; not required for LAN-only mode."
+            },
+            "provider": {
+                "title": "Cloud Provider",
+                "type": "string",
+                "default": "ac-freedom",
+                "enum": [
+                    "ac-freedom",
+                    "aux-home"
+                ],
+                "description": "Select the cloud service for your account. AC Freedom remains the default. AUX Home is experimental in this release and supports the EU region only."
             },
             "region": {
                 "title": "Region",
@@ -33,7 +43,7 @@
                     "usa",
                     "cn"
                 ],
-                "description": "Select the AUX Cloud region that matches your account."
+                "description": "Select the AUX Cloud region that matches your account. The experimental AUX Home provider requires the EU region."
             },
             "temperatureUnit": {
                 "title": "Temperature Unit",
@@ -110,6 +120,14 @@
                 "minimum": 1000,
                 "maximum": 15000,
                 "description": "Timeout in milliseconds for each cloud command attempt. If the cloud doesn't respond within this time, the next retry is triggered."
+            },
+            "requestTimeoutMs": {
+                "title": "REST Request Timeout (ms)",
+                "type": "integer",
+                "default": 5000,
+                "minimum": 1000,
+                "maximum": 30000,
+                "description": "Timeout for AUX cloud REST requests, independent from MQTT command confirmation."
             },
             "controlStrategy": {
                 "title": "Control Strategy",
@@ -197,6 +215,33 @@
                     }
                 }
             }
-        }
+        },
+        "allOf": [
+            {
+                "if": {
+                    "properties": {
+                        "provider": {
+                            "const": "aux-home"
+                        }
+                    },
+                    "required": [
+                        "provider"
+                    ]
+                },
+                "then": {
+                    "properties": {
+                        "region": {
+                            "const": "eu",
+                            "description": "AUX Home is experimental in this release and supports the EU region only."
+                        }
+                    },
+                    "required": [
+                        "username",
+                        "password",
+                        "region"
+                    ]
+                }
+            }
+        ]
     }
 }
