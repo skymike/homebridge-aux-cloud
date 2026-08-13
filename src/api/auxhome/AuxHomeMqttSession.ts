@@ -135,7 +135,7 @@ export class AuxHomeMqttSession {
     this.client = client;
     client.on('connect', () => this.handleConnect(client));
     client.on('close', () => this.handleClose(client));
-    client.on('message', (topic, payload) => this.handleMessage(topic, payload));
+    client.on('message', (topic, payload) => this.handleMessage(client, topic, payload));
   }
 
   private handleConnect(client: AuxHomeMqttClient): void {
@@ -158,8 +158,8 @@ export class AuxHomeMqttSession {
     this.scheduleReconnect();
   }
 
-  private handleMessage(topic: unknown, payload: unknown): void {
-    if (typeof topic !== 'string' || !Buffer.isBuffer(payload)) {
+  private handleMessage(client: AuxHomeMqttClient, topic: unknown, payload: unknown): void {
+    if (this.closed || !this.connected || this.client !== client || typeof topic !== 'string' || !Buffer.isBuffer(payload)) {
       return;
     }
     const topicSegments = topic.split('/');

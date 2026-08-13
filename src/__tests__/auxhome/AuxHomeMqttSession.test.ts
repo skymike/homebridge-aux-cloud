@@ -135,6 +135,23 @@ describe('AuxHomeMqttSession', () => {
     expect(clients[1].subscriptions).toEqual(['dev2app/did1/#']);
   });
 
+  test('ignores messages from a stale client after reconnecting', () => {
+    jest.useFakeTimers();
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
+    const received: Array<{ deviceId: string; payload: Buffer }> = [];
+    session.onMessage((message) => received.push(message));
+    session.connect([{ did: 'did1' }]);
+    clients[0].emit('connect');
+    clients[0].emit('close');
+    jest.advanceTimersByTime(1_000);
+    clients[1].emit('connect');
+
+    clients[0].emit('message', 'dev2app/did1/state', Buffer.from('stale'));
+
+    expect(received).toEqual([]);
+  });
+
   test('publishes on a device command topic only while connected', () => {
     const { clients, connector } = createConnector();
     const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
