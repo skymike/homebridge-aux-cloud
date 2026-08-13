@@ -152,6 +152,20 @@ describe('AuxHomeMqttSession', () => {
     expect(received).toEqual([]);
   });
 
+  test('does not emit messages from the former client after close', () => {
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
+    const received: Array<{ deviceId: string; payload: Buffer }> = [];
+    session.onMessage((message) => received.push(message));
+    session.connect([{ did: 'did1' }]);
+    clients[0].emit('connect');
+
+    session.close();
+    clients[0].emit('message', 'dev2app/did1/state', Buffer.from('closed'));
+
+    expect(received).toEqual([]);
+  });
+
   test('publishes on a device command topic only while connected', () => {
     const { clients, connector } = createConnector();
     const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
