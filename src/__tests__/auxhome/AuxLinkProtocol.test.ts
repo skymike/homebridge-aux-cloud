@@ -3,6 +3,7 @@ import {
   buildAuxLinkCommandPayload,
   parseAuxLinkStatePayload,
 } from '../../api/auxhome/AuxLinkProtocol';
+import { buildCommandPayload } from '../../api/broadlink/Protocol';
 
 describe('AUXLink protocol', () => {
   it('decodes a signed direct state frame', () => {
@@ -61,6 +62,11 @@ describe('AUXLink protocol', () => {
     expect(direct[10] & 0x07).toBe(3);
     expect(direct[11] >> 5).toBe(1);
     expect(direct[12] & 0x80).toBe(0x80);
+  });
+
+  it('preserves the legacy LAN frame when direct-only ECO is supplied', () => {
+    expect(buildCommandPayload({ eco: 1 }).toString('hex'))
+      .toBe('1900bb00068000000f00010180000fa00000000000000000009edd0000000000');
   });
 
   it.each([

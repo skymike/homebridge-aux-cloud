@@ -308,7 +308,6 @@ function buildAcCommandBody(params: Record<string, number>): Buffer {
   const clean = params['ac_clean'] ?? 0;
   const display = params['scrdisp'] ?? 0;
   const mildew = params['mldprf'] ?? 0;
-  const eco = params['eco'] ?? 0;
 
   // Temperature encoding: actual temp - 8, stored in bits 3-7
   let temperature = temp - 8;
@@ -342,8 +341,8 @@ function buildAcCommandBody(params: Record<string, number>): Buffer {
   payload[15] = (mode & 0x0f) << 5 | (params['ac_slp'] ?? 0) << 2;
   payload[16] = 0x00;
   payload[17] = 0x00;
-  // Byte 18: power (bit 5) | ECO (bit 4) | health (bit 1) | clean (bit 2)
-  payload[18] = (power & 0x01) << 5 | (eco & 0x01) << 4 | (health & 0x01) << 1 | (clean & 0x01) << 2;
+  // Byte 18: power (bit 5) | health (bit 1) | clean (bit 2)
+  payload[18] = (power & 0x01) << 5 | (health & 0x01) << 1 | (clean & 0x01) << 2;
   payload[19] = 0x00;
   // Byte 20: display (bit 4) | mildew (bits 3-4)
   payload[20] = (display & 0x01) << 4 | (mildew & 0x01) << 3;

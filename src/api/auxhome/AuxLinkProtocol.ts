@@ -55,13 +55,14 @@ export function parseAuxLinkStatePayload(payload: Buffer): Partial<AuxLinkState>
  */
 export function buildAuxLinkCommandPayload(params: Record<string, number>): Buffer {
   const temp = params['temp'];
+  const eco = params['eco'] ?? params['ecomode'] ?? 0;
   const commandParams = {
     ...params,
     ...(temp !== undefined && temp > 100 ? { temp: temp / 10 } : {}),
-    eco: params['eco'] ?? params['ecomode'] ?? 0,
   };
   const lanPayload = buildCommandPayload(commandParams);
-  const body = lanPayload.subarray(2, 25);
+  const body = Buffer.from(lanPayload.subarray(2, 25));
+  body[18] |= (eco & 0x01) << 4;
 
   return appendCommandPayloadChecksum(body);
 }
