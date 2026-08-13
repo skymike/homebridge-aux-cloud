@@ -15,6 +15,7 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import {
   ALLOWED_FEATURE_SWITCHES,
   type AuxCloudPlatformConfig,
+  type AuxCloudPlatformDependencies,
   type FeatureSwitchKey,
   type IAuxCloudPlatform,
 } from './types';
@@ -57,6 +58,10 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
 
   private refreshDebounce?: NodeJS.Timeout;
 
+  private pollInterval?: NodeJS.Timeout;
+
+  private unsubscribeProvider?: () => void;
+
   // Matter accessory instances
   private readonly matterAccessories: MatterThermostatAccessory[] = [];
 
@@ -67,6 +72,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     public readonly log: Logger,
     config: PlatformConfig,
     public readonly api: API,
+    dependencies: AuxCloudPlatformDependencies = {},
   ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
@@ -105,7 +111,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
         : 5000;
 
     // Create the client with custom timeout
-    this.provider = createProvider({
+    const providerFactory = dependencies.providerFactory ?? createProvider;
+    this.provider = providerFactory({
       provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
@@ -145,6 +152,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
   public async initialize(): Promise<void> {
     if (!this.credentialsConfigured) return;
 
+    this.subscribeToProvider();
+
     if (this.config.localControlEnabled) {
       const { DeviceDiscovery } = await import('./api/broadlink/DeviceDiscovery');
       const devicesWithStaticIp = (this.config.devices ?? []).filter((d) => d.ip && d.mac);
@@ -171,9 +180,37 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     await this.discoverAndRegisterDevices();
 
     const intervalSeconds = this.validatePollInterval(this.config.pollInterval);
-    setInterval(() => {
+    this.pollInterval = setInterval(() => {
       void this.refreshPoll();
     }, intervalSeconds * 1000);
+  }
+
+  private subscribeToProvider(): void {
+    if (!this.unsubscribeProvider) {
+      this.unsubscribeProvider = this.provider.onStateChange((device) => this.applyProviderState(device));
+    }
+  }
+
+  private applyProviderState(device: AuxDevice): void {
+    const existing = this.devicesById.get(device.endpointId);
+    if (!existing) {
+      return;
+    }
+    const mergedDevice: AuxDevice = {
+      ...existing,
+      ...device,
+      params: this.mergeParams(existing.params, device.params),
+      state: device.state ?? existing.state,
+      lastUpdated: device.lastUpdated ?? existing.lastUpdated,
+    };
+    this.devicesById.set(device.endpointId, mergedDevice);
+    this.completePendingCommand(device.endpointId);
+    const matterAccessory = this.matterAccessories.find((candidate) => (
+      candidate.getDevice()?.endpointId === device.endpointId
+    ));
+    if (matterAccessory) {
+      void matterAccessory.refresh();
+    }
   }
 
   // ─────────────────────────────────────────────
@@ -525,6 +562,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     }
 
     this.refreshDebounce = setTimeout(() => {
+      this.refreshDebounce = undefined;
       void this.refreshPoll();
     }, delayMs);
   }
@@ -595,5 +633,30 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       return 600;
     }
     return interval;
+  }
+
+  public onPlatformUnload(): void {
+    this.unsubscribeProvider?.();
+    this.unsubscribeProvider = undefined;
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = undefined;
+    }
+    if (this.refreshDebounce) {
+      clearTimeout(this.refreshDebounce);
+      this.refreshDebounce = undefined;
+    }
+    this.pendingCommands.clear();
+    void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
+
+    const accessories = this.matterAccessories.flatMap((accessory) => [
+      accessory.toAccessory(),
+      accessory.toFanAccessory(),
+      ...accessory.getMatterSwitchAccessories(),
+    ]);
+    if (accessories.length > 0) {
+      void this.api.matter.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, accessories);
+      this.matterAccessories.length = 0;
+    }
   }
 }

@@ -105,6 +105,10 @@ export class AuxHomeMqttSession {
     return () => this.listeners.delete(listener);
   }
 
+  public isConnected(): boolean {
+    return this.connected;
+  }
+
   public close(): void {
     this.closed = true;
     this.connected = false;

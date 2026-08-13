@@ -1,6 +1,7 @@
 import type { Logger } from 'homebridge';
 
 import { AcFreedomProvider } from './AcFreedomProvider';
+import { AuxHomeProvider } from './AuxHomeProvider';
 import type { AuxProvider, AuxProviderKind } from './AuxProvider';
 
 export interface CreateProviderOptions {
@@ -16,7 +17,11 @@ export function createProvider(options: CreateProviderOptions = {}): AuxProvider
       throw new Error('AUX Home currently supports the EU region only');
     }
 
-    throw new Error('AUX Home provider is not implemented yet');
+    return new AuxHomeProvider({
+      region: 'eu',
+      logger: options.logger,
+      requestTimeoutMs: options.requestTimeoutMs,
+    });
   }
 
   return new AcFreedomProvider(options);

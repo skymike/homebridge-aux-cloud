@@ -1,7 +1,8 @@
 import type { API, Logger, PlatformConfig } from 'homebridge';
 
 import type { AuxDevice } from './api/AuxCloudClient';
-import type { AuxProviderKind } from './api/providers/AuxProvider';
+import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
+import type { CreateProviderOptions } from './api/providers/createProvider';
 
 export type FeatureSwitchKey =
   | 'screenDisplay'
@@ -19,6 +20,10 @@ export const ALLOWED_FEATURE_SWITCHES: FeatureSwitchKey[] = [
   'eco',
   'sleep',
 ];
+
+export interface AuxCloudPlatformDependencies {
+  providerFactory?: (options: CreateProviderOptions) => AuxProvider;
+}
 
 export interface AuxCloudPlatformConfig extends PlatformConfig {
   provider?: AuxProviderKind;

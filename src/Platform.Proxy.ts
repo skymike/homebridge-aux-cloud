@@ -6,6 +6,7 @@ import type { AuxCloudPlatformConfig } from './types';
 
 interface InitializablePlatform extends DynamicPlatformPlugin {
   initialize(): Promise<void>;
+  onPlatformUnload?(): void;
 }
 
 export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
@@ -96,5 +97,10 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
     } else {
       this.bufferedAccessories.push(accessory);
     }
+  }
+
+  public onPlatformUnload(): void {
+    this.inner?.onPlatformUnload?.();
+    this.matterPlatform?.onPlatformUnload();
   }
 }

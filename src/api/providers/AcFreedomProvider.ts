@@ -38,7 +38,8 @@ export class AcFreedomProvider implements AuxProvider {
     this.client.invalidateSession();
   }
 
-  public onStateChange(_listener: AuxProviderStateListener): () => void {
+  public onStateChange(listener: AuxProviderStateListener): () => void {
+    void listener;
     return () => {};
   }
 

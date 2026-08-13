@@ -14,7 +14,13 @@ import { createProvider } from './api/providers/createProvider';
 import type { AuxProvider } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import { type AuxCloudPlatformConfig, type FeatureSwitchKey, type IAuxCloudPlatform, ALLOWED_FEATURE_SWITCHES } from './types';
+import {
+  type AuxCloudPlatformConfig,
+  type AuxCloudPlatformDependencies,
+  type FeatureSwitchKey,
+  type IAuxCloudPlatform,
+  ALLOWED_FEATURE_SWITCHES,
+} from './types';
 import type { AuxCloudPlatform } from './platform';
 
 export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlatform {
@@ -67,10 +73,15 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
 
   private refreshDebounce?: NodeJS.Timeout;
 
+  private pollInterval?: NodeJS.Timeout;
+
+  private unsubscribeProvider?: () => void;
+
   constructor(
     public readonly log: Logger,
     config: PlatformConfig,
     public readonly api: API,
+    dependencies: AuxCloudPlatformDependencies = {},
   ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
@@ -109,7 +120,8 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
         : 5000;
 
     // Create the client with custom timeout
-    this.provider = createProvider({
+    const providerFactory = dependencies.providerFactory ?? createProvider;
+    this.provider = providerFactory({
       provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
@@ -144,6 +156,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       return;
     }
 
+    this.subscribeToProvider();
     await this.startPolling();
   }
 
@@ -174,9 +187,33 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     await this.refreshDevices();
 
     const intervalSeconds = this.validatePollInterval(this.config.pollInterval);
-    setInterval(() => {
+    this.pollInterval = setInterval(() => {
       void this.refreshDevices();
     }, intervalSeconds * 1000);
+  }
+
+  private subscribeToProvider(): void {
+    if (!this.unsubscribeProvider) {
+      this.unsubscribeProvider = this.provider.onStateChange((device) => this.applyProviderState(device));
+    }
+  }
+
+  private applyProviderState(device: AuxDevice): void {
+    const existing = this.devicesById.get(device.endpointId);
+    if (!existing) {
+      return;
+    }
+    const mergedDevice: AuxDevice = {
+      ...existing,
+      ...device,
+      params: this.mergeParams(existing.params, device.params),
+      state: device.state ?? existing.state,
+      lastUpdated: device.lastUpdated ?? existing.lastUpdated,
+    };
+    this.devicesById.set(device.endpointId, mergedDevice);
+    this.completePendingCommand(device.endpointId);
+    const uuid = this.api.hap.uuid.generate(device.endpointId);
+    this.handlers.get(uuid)?.updateAccessory(mergedDevice);
   }
 
   configureAccessory(accessory: PlatformAccessory): void {
@@ -310,6 +347,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     }
 
     this.refreshDebounce = setTimeout(() => {
+      this.refreshDebounce = undefined;
       void this.refreshDevices();
     }, delayMs);
   }
@@ -540,5 +578,20 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     }
 
     return merged;
+  }
+
+  public onPlatformUnload(): void {
+    this.unsubscribeProvider?.();
+    this.unsubscribeProvider = undefined;
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = undefined;
+    }
+    if (this.refreshDebounce) {
+      clearTimeout(this.refreshDebounce);
+      this.refreshDebounce = undefined;
+    }
+    this.pendingCommands.clear();
+    void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
   }
 }

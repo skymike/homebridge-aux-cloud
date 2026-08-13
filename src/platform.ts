@@ -15,6 +15,7 @@ import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
 import { MatterThermostatAccessory } from './MatterThermostatAccessory';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
+import type { AuxCloudPlatformDependencies } from './types';
 
 export type FeatureSwitchKey =
    | 'screenDisplay'
@@ -115,6 +116,10 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
 
   private refreshDebounce?: NodeJS.Timeout;
 
+  private pollInterval?: NodeJS.Timeout;
+
+  private unsubscribeProvider?: () => void;
+
     // Matter accessory instances
   private readonly matterAccessories: MatterThermostatAccessory[] = [];
 
@@ -123,6 +128,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
     public readonly log: Logger,
     config: PlatformConfig,
     public readonly api: API,
+    dependencies: AuxCloudPlatformDependencies = {},
    ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
@@ -161,7 +167,8 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         : 5000;
 
      // Create the cloud provider with custom timeout
-    this.provider = createProvider({
+    const providerFactory = dependencies.providerFactory ?? createProvider;
+    this.provider = providerFactory({
       provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
@@ -351,6 +358,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
      }
 
     this.refreshDebounce = setTimeout(() => {
+      this.refreshDebounce = undefined;
       void this.refreshDevices();
      }, delayMs);
    }
@@ -393,6 +401,8 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
   }
 
   private async initialize(): Promise<void> {
+    this.subscribeToProvider();
+
     if (this.config.localControlEnabled) {
       const { DeviceDiscovery } = await import('./api/broadlink/DeviceDiscovery');
       const devicesWithStaticIp = (this.config.devices ?? []).filter((d) => d.ip && d.mac);
@@ -419,10 +429,41 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
       await this.refreshDevices();
 
       const intervalSeconds = this.validatePollInterval(this.config.pollInterval);
-      setInterval(() => {
+      this.pollInterval = setInterval(() => {
         void this.refreshDevices();
          }, intervalSeconds * 1000);
         }
+
+  private subscribeToProvider(): void {
+    if (!this.unsubscribeProvider) {
+      this.unsubscribeProvider = this.provider.onStateChange((device) => this.applyProviderState(device));
+    }
+  }
+
+  private applyProviderState(device: AuxDevice): void {
+    const existing = this.devicesById.get(device.endpointId);
+    if (!existing) {
+      return;
+    }
+    const mergedDevice: AuxDevice = {
+      ...existing,
+      ...device,
+      params: this.mergeParams(existing.params, device.params),
+      state: device.state ?? existing.state,
+      lastUpdated: device.lastUpdated ?? existing.lastUpdated,
+    };
+    this.devicesById.set(device.endpointId, mergedDevice);
+    this.completePendingCommand(device.endpointId);
+
+    const uuid = this.api.hap.uuid.generate(device.endpointId);
+    this.handlers.get(uuid)?.updateAccessory(mergedDevice);
+    const matterAccessory = this.matterAccessories.find((candidate) => (
+      candidate.getDevice()?.endpointId === device.endpointId
+    ));
+    if (matterAccessory) {
+      void matterAccessory.refresh();
+    }
+  }
 
   private validatePollInterval(interval?: number): number {
     if (!interval || Number.isNaN(interval) || interval < 15) {
@@ -689,6 +730,18 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
 
     // DynamicPlatformPlugin hook — called when the platform is unloaded
     onPlatformUnload(): void {
+      this.unsubscribeProvider?.();
+      this.unsubscribeProvider = undefined;
+      if (this.pollInterval) {
+        clearInterval(this.pollInterval);
+        this.pollInterval = undefined;
+      }
+      if (this.refreshDebounce) {
+        clearTimeout(this.refreshDebounce);
+        this.refreshDebounce = undefined;
+      }
+      this.pendingCommands.clear();
+      void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
       this.unregisterMatterAccessories();
     }
 
