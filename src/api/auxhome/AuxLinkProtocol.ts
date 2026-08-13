@@ -6,6 +6,46 @@ import {
 } from '../broadlink/Protocol';
 
 const STATE_SIGNATURE = Buffer.from('bb00070000010f000111', 'hex');
+const MQTT_ENVELOPE_MAGIC = 0xa5a5;
+const MQTT_ENVELOPE_OVERHEAD = 10;
+const MQTT_PLAIN_COMMAND = 0x000b;
+
+function auxSocketChecksum(payload: Buffer): number {
+  let checksum = 0xffff;
+  for (const byte of payload) {
+    checksum ^= byte << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      checksum = ((checksum & 0x8000) !== 0 ? (checksum << 1) ^ 0x1021 : checksum << 1) & 0xffff;
+    }
+  }
+  return checksum;
+}
+
+export function wrapAuxLinkMqttPayload(payload: Buffer, sequence: number): Buffer {
+  const envelope = Buffer.alloc(payload.length + MQTT_ENVELOPE_OVERHEAD);
+  envelope.writeUInt16LE(MQTT_ENVELOPE_MAGIC, 0);
+  envelope.writeUInt16LE(envelope.length, 2);
+  envelope.writeUInt16LE(MQTT_PLAIN_COMMAND, 4);
+  envelope.writeUInt16LE(sequence & 0xffff, 6);
+  payload.copy(envelope, 8);
+  envelope.writeUInt16BE(auxSocketChecksum(envelope.subarray(0, -2)), envelope.length - 2);
+  return envelope;
+}
+
+export function unwrapAuxLinkMqttPayload(envelope: Buffer): Buffer | undefined {
+  if (
+    envelope.length < MQTT_ENVELOPE_OVERHEAD
+    || envelope.readUInt16LE(0) !== MQTT_ENVELOPE_MAGIC
+    || envelope.readUInt16LE(2) !== envelope.length
+  ) {
+    return undefined;
+  }
+  const expectedChecksum = auxSocketChecksum(envelope.subarray(0, -2));
+  if (envelope.readUInt16BE(envelope.length - 2) !== expectedChecksum) {
+    return undefined;
+  }
+  return envelope.subarray(8, -2);
+}
 
 export interface AuxLinkState {
   power: number;

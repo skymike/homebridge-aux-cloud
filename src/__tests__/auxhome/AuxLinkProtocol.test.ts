@@ -2,10 +2,38 @@ import {
   auxLinkStateToParams,
   buildAuxLinkCommandPayload,
   parseAuxLinkStatePayload,
+  unwrapAuxLinkMqttPayload,
+  wrapAuxLinkMqttPayload,
 } from '../../api/auxhome/AuxLinkProtocol';
 import { buildCommandPayload } from '../../api/broadlink/Protocol';
 
 describe('AUXLink protocol', () => {
+  it('wraps an outbound command in the native AUXLink MQTT envelope', () => {
+    const command = Buffer.from('bb0006800000020011012b7e', 'hex');
+
+    expect(wrapAuxLinkMqttPayload(command, 0x1234).toString('hex'))
+      .toBe('a5a516000b003412bb0006800000020011012b7e4998');
+  });
+
+  it('unwraps a checksum-valid inbound AUXLink MQTT envelope', () => {
+    const envelope = Buffer.from(
+      'a5a523000b007856bb00070000010f000111880081a0002000002000000005372cd140',
+      'hex',
+    );
+
+    expect(unwrapAuxLinkMqttPayload(envelope)?.toString('hex'))
+      .toBe('bb00070000010f000111880081a0002000002000000005372c');
+  });
+
+  it('rejects an inbound AUXLink MQTT envelope with a bad checksum', () => {
+    const envelope = Buffer.from(
+      'a5a523000b007856bb00070000010f000111880081a0002000002000000005372cd141',
+      'hex',
+    );
+
+    expect(unwrapAuxLinkMqttPayload(envelope)).toBeUndefined();
+  });
+
   it('decodes a signed direct state frame', () => {
     const frame = Buffer.from('bb00070000010f000111880081a0002000002000000005372c', 'hex');
 

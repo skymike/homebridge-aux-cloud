@@ -2,6 +2,8 @@ import mqtt from 'mqtt';
 import { Duplex } from 'node:stream';
 import { connect as connectTls } from 'node:tls';
 
+import { unwrapAuxLinkMqttPayload, wrapAuxLinkMqttPayload } from './AuxLinkProtocol';
+
 const AUX_HOME_APP_ID = '60b8eaa792aa4de1badf04fc20a8ba56';
 const AUX_HOME_MQTT_URL = 'mqtts://eu-smthome-m2m.aux-global.com:8883';
 const AUX_HOME_MQTT_HOST = 'eu-smthome-m2m.aux-global.com';
@@ -138,7 +140,7 @@ export function stateTopic(deviceId: string): string {
 }
 
 export function commandTopic(deviceId: string): string {
-  return `app2dev/${deviceId}`;
+  return `app2dev/${deviceId}/#`;
 }
 
 export class AuxHomeMqttSession {
@@ -162,6 +164,8 @@ export class AuxHomeMqttSession {
   private authenticationRejected = false;
 
   private reconnectAttempts = 0;
+
+  private sequence = 0;
 
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
@@ -195,7 +199,9 @@ export class AuxHomeMqttSession {
     if (!this.connected || !this.client) {
       throw new Error('AUX Home MQTT is disconnected');
     }
-    this.client.publish(commandTopic(deviceId), payload);
+    const directPayload = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+    this.sequence = (this.sequence + 1) & 0xffff;
+    this.client.publish(commandTopic(deviceId), wrapAuxLinkMqttPayload(directPayload, this.sequence));
   }
 
   public onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void {
@@ -286,7 +292,11 @@ export class AuxHomeMqttSession {
     if (topicSegments[0] !== 'dev2app' || !deviceId) {
       return;
     }
-    const message = { deviceId, payload };
+    const directPayload = unwrapAuxLinkMqttPayload(payload);
+    if (!directPayload) {
+      return;
+    }
+    const message = { deviceId, payload: directPayload };
     for (const listener of this.listeners) {
       listener(message);
     }
