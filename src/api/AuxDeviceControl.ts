@@ -6,7 +6,9 @@
 import { createSocket } from 'dgram';
 import type { Logger } from 'homebridge';
 
-import { AuxCloudClient, type AuxDevice } from './AuxCloudClient';
+import type { AuxDevice } from './AuxCloudClient';
+import { AcFreedomProvider } from './providers/AcFreedomProvider';
+import type { AuxProvider } from './providers/AuxProvider';
 import { AC_POWER } from './constants';
 import type { DiscoveredDevice } from './broadlink/DeviceDiscovery';
 import {
@@ -34,7 +36,7 @@ export interface AuxDeviceControlOptions {
   commandRetryCount?: number;
   localControlEnabled?: boolean;
   devices?: DeviceMapping[];
-  cloudClient?: AuxCloudClient;
+  cloudProvider?: Pick<AuxProvider, 'setDeviceParams'>;
 }
 
 const LAN_FAILURE_THRESHOLD = 3;
@@ -52,7 +54,7 @@ interface LanSession {
 }
 
 export class AuxDeviceControl {
-  private client: AuxCloudClient;
+  private cloudProvider: Pick<AuxProvider, 'setDeviceParams'>;
   private deviceMappings = new Map<string, DeviceMapping>(); // keyed by normalized MAC
   private discoveredDevices = new Map<string, DiscoveredDevice>(); // keyed by normalized MAC
   private consecutiveFailures = new Map<string, number>();
@@ -61,7 +63,7 @@ export class AuxDeviceControl {
 
   constructor(options: AuxDeviceControlOptions) {
     this.logger = options.logger;
-    this.client = options.cloudClient ?? new AuxCloudClient({
+    this.cloudProvider = options.cloudProvider ?? new AcFreedomProvider({
       region: options.region ?? 'eu',
       logger: options.logger,
       requestTimeoutMs: options.commandTimeoutMs ?? 5000,
@@ -353,7 +355,7 @@ export class AuxDeviceControl {
 
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        await this.client.setDeviceParams(device, params);
+        await this.cloudProvider.setDeviceParams(device, params);
         return;
       } catch (error) {
         if (attempt < retryCount) {

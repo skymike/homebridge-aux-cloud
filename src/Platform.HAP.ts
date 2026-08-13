@@ -8,8 +8,10 @@ import type {
   Service,
 } from 'homebridge';
 
-import { AuxApiError, AuxCloudClient, type AuxDevice } from './api/AuxCloudClient';
+import { AuxApiError, type AuxDevice } from './api/AuxCloudClient';
 import { AuxDeviceControl } from './api/AuxDeviceControl';
+import { createProvider } from './api/providers/createProvider';
+import type { AuxProvider } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import { type AuxCloudPlatformConfig, type FeatureSwitchKey, type IAuxCloudPlatform, ALLOWED_FEATURE_SWITCHES } from './types';
@@ -28,7 +30,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
 
   private readonly config: AuxCloudPlatformConfig;
 
-  private readonly client: AuxCloudClient;
+  private readonly provider: AuxProvider;
 
   private readonly deviceControl: AuxDeviceControl;
 
@@ -107,7 +109,8 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
         : 5000;
 
     // Create the client with custom timeout
-    this.client = new AuxCloudClient({
+    this.provider = createProvider({
+      provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
       requestTimeoutMs: this.commandTimeoutMs,
@@ -121,7 +124,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       commandRetryCount: this.commandRetryCount,
       localControlEnabled: this.config.localControlEnabled,
       devices: this.config.devices,
-      cloudClient: this.client,
+        cloudProvider: this.provider,
     });
 
     this.log.debug(
@@ -224,7 +227,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
   ): Promise<void> {
     // Ensure cloud session is valid before sending command
     if (this.credentialsConfigured) {
-      await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
+          await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
     }
     try {
       await this.deviceControl.sendCommand(device, params, {
@@ -369,8 +372,8 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       let cloudFetchSucceeded = false;
 
       try {
-        await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
-        cloudDevices = await this.client.listDevices({
+        await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
+        cloudDevices = await this.provider.listDevices({
           includeIds: this.includeIds,
           excludeIds: this.excludeIds,
         });
@@ -384,7 +387,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
         cloudDevices = this.lastKnownCloudDevices.length > 0
           ? this.lastKnownCloudDevices
           : cloudDevices; // empty (first run with no cloud)
-        this.client.invalidateSession();
+        this.provider.invalidateSession();
       }
 
       const lanOnlyDevices = this.getLanOnlyDevices();

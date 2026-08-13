@@ -6,8 +6,10 @@ import type {
   PlatformConfig,
 } from 'homebridge';
 
-import { AuxApiError, AuxCloudClient, type AuxDevice } from './api/AuxCloudClient';
+import { AuxApiError, type AuxDevice } from './api/AuxCloudClient';
 import { AuxDeviceControl } from './api/AuxDeviceControl';
+import { createProvider } from './api/providers/createProvider';
+import type { AuxProvider } from './api/providers/AuxProvider';
 import { MatterThermostatAccessory } from './MatterThermostatAccessory';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
 import {
@@ -20,7 +22,7 @@ import {
 export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudPlatform {
   private readonly config: AuxCloudPlatformConfig;
 
-  public readonly client: AuxCloudClient;
+  public readonly provider: AuxProvider;
 
   public readonly deviceControl: AuxDeviceControl;
 
@@ -103,7 +105,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
         : 5000;
 
     // Create the client with custom timeout
-    this.client = new AuxCloudClient({
+    this.provider = createProvider({
+      provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
       requestTimeoutMs: this.commandTimeoutMs,
@@ -117,7 +120,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       commandRetryCount: this.commandRetryCount,
       localControlEnabled: this.config.localControlEnabled,
       devices: this.config.devices,
-      cloudClient: this.client,
+        cloudProvider: this.provider,
     });
 
     this.log.debug(
@@ -182,8 +185,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
     let cloudDevices: AuxDevice[] = [];
 
     try {
-      await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
-      cloudDevices = await this.client.listDevices({
+          await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
+  cloudDevices = await this.provider.listDevices({
         includeIds: this.includeIds,
         excludeIds: this.excludeIds,
       });
@@ -195,7 +198,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       cloudDevices = this.lastKnownCloudDevices.length > 0
         ? this.lastKnownCloudDevices
         : cloudDevices;
-      this.client.invalidateSession();
+  this.provider.invalidateSession();
     }
 
     const lanOnlyDevices = this.getLanOnlyDevices();
@@ -299,8 +302,8 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       let cloudDevices: AuxDevice[] = [];
 
       try {
-        await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
-        cloudDevices = await this.client.listDevices({
+        await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
+        cloudDevices = await this.provider.listDevices({
           includeIds: this.includeIds,
           excludeIds: this.excludeIds,
         });
@@ -312,7 +315,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
         cloudDevices = this.lastKnownCloudDevices.length > 0
           ? this.lastKnownCloudDevices
           : cloudDevices;
-        this.client.invalidateSession();
+        this.provider.invalidateSession();
       }
 
       const lanOnlyDevices = this.getLanOnlyDevices();
@@ -439,7 +442,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
   ): Promise<void> {
     // Ensure cloud session is valid before sending command
     if (this.credentialsConfigured) {
-      await this.client.ensureLoggedIn(this.config.username!, this.config.password!);
+  await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
     }
     try {
       await this.deviceControl.sendCommand(device, params, {

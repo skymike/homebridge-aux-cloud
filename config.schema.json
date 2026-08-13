@@ -24,6 +24,16 @@
                 "type": "string",
                 "description": "Not required for LAN-only mode."
             },
+            "provider": {
+                "title": "Cloud Provider",
+                "type": "string",
+                "default": "ac-freedom",
+                "enum": [
+                    "ac-freedom",
+                    "aux-home"
+                ],
+                "description": "Select the cloud service for your account. AUX Home is currently limited to the EU region."
+            },
             "region": {
                 "title": "Region",
                 "type": "string",

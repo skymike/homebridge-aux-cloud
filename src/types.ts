@@ -1,6 +1,7 @@
 import type { API, Logger, PlatformConfig } from 'homebridge';
 
 import type { AuxDevice } from './api/AuxCloudClient';
+import type { AuxProviderKind } from './api/providers/AuxProvider';
 
 export type FeatureSwitchKey =
   | 'screenDisplay'
@@ -20,6 +21,7 @@ export const ALLOWED_FEATURE_SWITCHES: FeatureSwitchKey[] = [
 ];
 
 export interface AuxCloudPlatformConfig extends PlatformConfig {
+  provider?: AuxProviderKind;
   username?: string;
   password?: string;
   region?: 'eu' | 'usa' | 'cn';
