@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'crypto';
+import axios from 'axios';
 
 import { AuxHomeRestClient } from '../../api/auxhome/AuxHomeRestClient';
 
@@ -15,6 +16,14 @@ function makePublicKeyBase64(): string {
 }
 
 describe('AuxHomeRestClient', () => {
+  it('uses the independently configured REST request timeout', () => {
+    const create = jest.spyOn(axios, 'create').mockReturnValue({ request: jest.fn() } as never);
+
+    new AuxHomeRestClient({ requestTimeoutMs: 12_345 });
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 12_345 }));
+    create.mockRestore();
+  });
   it('authenticates, discovers valid devices, and filters normalized endpoint IDs', async () => {
     const requests: RequestConfig[] = [];
     const publicKeyBase64 = makePublicKeyBase64();

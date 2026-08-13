@@ -8,7 +8,7 @@ import type { Logger } from 'homebridge';
 
 import type { AuxDevice } from './AuxCloudClient';
 import { AcFreedomProvider } from './providers/AcFreedomProvider';
-import type { AuxProvider } from './providers/AuxProvider';
+import { AuxProviderCommandSupersededError, type AuxProvider } from './providers/AuxProvider';
 import { AC_POWER } from './constants';
 import type { DiscoveredDevice } from './broadlink/DeviceDiscovery';
 import {
@@ -362,6 +362,9 @@ export class AuxDeviceControl {
         await this.cloudProvider.setDeviceParams(device, params);
         return;
       } catch (error) {
+        if (error instanceof AuxProviderCommandSupersededError) {
+          throw error;
+        }
         if (attempt < retryCount) {
           const delayMs = Math.min(500 * Math.pow(2, attempt), 3000);
           await new Promise((resolve) => setTimeout(resolve, delayMs));

@@ -24,6 +24,7 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
   private readonly config: AuxCloudPlatformConfig;
 
   public readonly provider: AuxProvider;
+  private readonly closeProviderOnUnload: boolean;
 
   public readonly deviceControl: AuxDeviceControl;
 
@@ -115,11 +116,13 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
 
     // Create the client with custom timeout
     const providerFactory = dependencies.providerFactory ?? createProvider;
+    this.closeProviderOnUnload = dependencies.closeProviderOnUnload !== false;
     this.provider = providerFactory({
       provider: this.config.provider,
       region: this.config.region ?? 'eu',
       logger: this.log,
-      requestTimeoutMs: this.commandTimeoutMs,
+      requestTimeoutMs: this.config.requestTimeoutMs ?? 5000,
+      commandTimeoutMs: this.commandTimeoutMs,
     });
     this.redactDeviceIdentifiers = this.provider.kind === 'aux-home';
 
@@ -720,7 +723,9 @@ export class AuxCloudMatterPlatform implements DynamicPlatformPlugin, IAuxCloudP
       clearTimeout(timer);
     }
     this.pendingCompletionTimers.clear();
-    void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
+    if (this.closeProviderOnUnload) {
+      void this.provider.close().catch(() => this.log.warn('Failed to close AUX cloud provider cleanly'));
+    }
 
     const accessories = this.matterAccessories.flatMap((accessory) => [
       accessory.toAccessory(),

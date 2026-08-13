@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 import { encryptAuxHomeAccount, encryptAuxHomePassword } from './AuxHomeCrypto';
-import type { AuxHomeDeviceRecord, AuxHomeSession, MyResponse } from './AuxHomeTypes';
+import type { AuxHomeDeviceRecord, AuxHomeRawDeviceRecord, AuxHomeSession, MyResponse } from './AuxHomeTypes';
 
 const AUX_HOME_EU_BASE_URL = 'https://eu-smthome-api.aux-global.com/app/';
 const COMPATIBILITY_HEADERS = {
@@ -25,6 +25,16 @@ export interface AuxHomeTransport {
 export interface AuxHomeRestClientOptions {
   transport?: AuxHomeTransport;
   now?: () => number;
+  requestTimeoutMs?: number;
+}
+
+export type AuxHomeRestErrorKind = 'auth' | 'network' | 'invalid-response' | 'request';
+
+export class AuxHomeRestError extends Error {
+  constructor(public readonly kind: AuxHomeRestErrorKind, message: string, public readonly code?: number) {
+    super(message);
+    this.name = 'AuxHomeRestError';
+  }
 }
 
 export interface AuxHomeDeviceQueryOptions {
@@ -42,10 +52,10 @@ interface LoginResult {
   token?: { token?: string };
 }
 
-type DeviceResponse = AuxHomeDeviceRecord[] | {
-  devices?: AuxHomeDeviceRecord[];
-  deviceList?: AuxHomeDeviceRecord[];
-  list?: AuxHomeDeviceRecord[];
+type DeviceResponse = AuxHomeRawDeviceRecord[] | {
+  devices?: AuxHomeRawDeviceRecord[];
+  deviceList?: AuxHomeRawDeviceRecord[];
+  list?: AuxHomeRawDeviceRecord[];
 };
 
 export class AuxHomeRestClient {
@@ -56,7 +66,10 @@ export class AuxHomeRestClient {
   private session?: AuxHomeSession;
 
   constructor(options: AuxHomeRestClientOptions = {}) {
-    this.transport = options.transport ?? axios.create({ baseURL: AUX_HOME_EU_BASE_URL, timeout: 5000 });
+    this.transport = options.transport ?? axios.create({
+      baseURL: AUX_HOME_EU_BASE_URL,
+      timeout: options.requestTimeoutMs ?? 5000,
+    });
     this.now = options.now ?? Date.now;
   }
 
@@ -64,7 +77,7 @@ export class AuxHomeRestClient {
     const publicKeyResponse = await this.request<LoginPublicKey>({ method: 'GET', url: '/auth/getPubkey' });
     const publicKeyBase64 = publicKeyResponse.publicKey ?? publicKeyResponse.publicKeyBase64;
     if (!publicKeyBase64) {
-      throw new Error('AUX Home request failed (invalid-response): request rejected');
+      throw new AuxHomeRestError('invalid-response', 'AUX Home request failed (invalid-response): request rejected');
     }
 
     const result = await this.request<LoginResult>({
@@ -80,7 +93,7 @@ export class AuxHomeRestClient {
     const uid = result.appUser?.uid;
     const token = result.token?.token;
     if (!uid || !token) {
-      throw new Error('AUX Home request failed (invalid-response): request rejected');
+      throw new AuxHomeRestError('invalid-response', 'AUX Home request failed (invalid-response): request rejected');
     }
 
     this.session = { uid, token };
@@ -118,13 +131,23 @@ export class AuxHomeRestClient {
   }
 
   private async request<T>(request: AuxHomeRequestConfig): Promise<T> {
-    const response = await this.transport.request({
-      ...request,
-      headers: { ...COMPATIBILITY_HEADERS, ...request.headers },
-    });
+    let response: { data: unknown };
+    try {
+      response = await this.transport.request({
+        ...request,
+        headers: { ...COMPATIBILITY_HEADERS, ...request.headers },
+      });
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      if (status === 401 || status === 403) {
+        throw new AuxHomeRestError('auth', 'AUX Home authentication rejected', status);
+      }
+      throw new AuxHomeRestError('network', 'AUX Home network request failed');
+    }
     const payload = response.data as MyResponse<T>;
     if (payload.code !== 0) {
-      throw new Error(`AUX Home request failed (${String(payload.code)}): request rejected`);
+      const kind = payload.code === 401 || payload.code === 403 ? 'auth' : 'request';
+      throw new AuxHomeRestError(kind, `AUX Home request failed (${String(payload.code)}): request rejected`, payload.code);
     }
     return payload.data;
   }
@@ -136,7 +159,7 @@ export class AuxHomeRestClient {
     return { authorization: `bearer ${this.session.token}` };
   }
 
-  private deviceRecords(response: DeviceResponse): AuxHomeDeviceRecord[] {
+  private deviceRecords(response: DeviceResponse): AuxHomeRawDeviceRecord[] {
     if (Array.isArray(response)) {
       return response;
     }

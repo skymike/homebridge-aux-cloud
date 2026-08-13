@@ -54,16 +54,21 @@ class FakeProvider implements AuxProvider {
 
   public readonly unsubscribe = jest.fn();
 
-  private listener?: AuxProviderStateListener;
+  private readonly listeners = new Set<AuxProviderStateListener>();
 
   public onStateChange(listener: AuxProviderStateListener): () => void {
-    this.listener = listener;
-    return this.unsubscribe;
+    this.listeners.add(listener);
+    return () => {
+      this.unsubscribe();
+      this.listeners.delete(listener);
+    };
   }
 
   public emit(device: AuxDevice): void {
-    this.listener?.(device);
+    for (const listener of this.listeners) listener(device);
   }
+
+  public listenerCount(): number { return this.listeners.size; }
 }
 
 function makePlatformHarness() {
@@ -253,6 +258,47 @@ describe('active proxy platform AUX Home push integration', () => {
 
     expect(hapUnload).toHaveBeenCalledTimes(1);
     expect(matterUnload).toHaveBeenCalledTimes(1);
+  });
+
+  test('expose=both shares one AUX Home provider and pushes state to both active views', async () => {
+    const base = makePlatformHarness();
+    base.provider.listDevices.mockResolvedValue([]);
+    const providerFactory = jest.fn(() => base.provider);
+    const api = {
+      ...base.api,
+      isMatterAvailable: jest.fn(() => true),
+      isMatterEnabled: jest.fn(() => true),
+      packageJSON: { version: '0.0.0-test' },
+      matter: {
+        uuid: { generate: (id: string) => `uuid-${id}` },
+        deviceTypes: { Thermostat: 'Thermostat', Fan: 'Fan', OnOffSwitch: 'OnOffSwitch' },
+        registerPlatformAccessories: jest.fn().mockResolvedValue(undefined),
+        unregisterPlatformAccessories: jest.fn().mockResolvedValue(undefined),
+        updateAccessoryState: jest.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as API;
+    const proxy = new AuxCloudPlatformProxy(base.platform.log, {
+      platform: 'AUXCloud', name: 'Both test', username: 'synthetic', password: 'synthetic',
+      provider: 'aux-home', expose: 'both',
+    } as PlatformConfig, api, { providerFactory });
+    const launch = (api.on as jest.Mock).mock.calls.filter(([event]) => event === 'didFinishLaunching').at(-1)[1];
+    await launch();
+    const internals = proxy as unknown as {
+      inner: AuxCloudHAPPlatform;
+      matterPlatform: AuxCloudMatterPlatform;
+    };
+    const initial = makeDevice();
+    (internals.inner as unknown as { devicesById: Map<string, AuxDevice> }).devicesById.set(ENDPOINT_ID, initial);
+    (internals.matterPlatform as unknown as { devicesById: Map<string, AuxDevice> }).devicesById.set(ENDPOINT_ID, initial);
+
+    base.provider.emit(makeDevice({ params: { pwr: 1, temp: 255, ac_mode: 0 } }));
+
+    expect(providerFactory).toHaveBeenCalledTimes(1);
+    expect(base.provider.listenerCount()).toBe(2);
+    expect(internals.inner.getDevice(ENDPOINT_ID)?.params).toMatchObject({ pwr: 1, temp: 255 });
+    expect(internals.matterPlatform.getDevice(ENDPOINT_ID)?.params).toMatchObject({ pwr: 1, temp: 255 });
+    proxy.onPlatformUnload();
+    expect(base.provider.close).toHaveBeenCalledTimes(1);
   });
 
   test.each([

@@ -9,6 +9,7 @@ export interface CreateProviderOptions {
   region?: 'eu' | 'usa' | 'cn';
   logger?: Logger;
   requestTimeoutMs?: number;
+  commandTimeoutMs?: number;
 }
 
 export function createProvider(options: CreateProviderOptions = {}): AuxProvider {
@@ -21,6 +22,7 @@ export function createProvider(options: CreateProviderOptions = {}): AuxProvider
       region: 'eu',
       logger: options.logger,
       requestTimeoutMs: options.requestTimeoutMs,
+      commandTimeoutMs: options.commandTimeoutMs,
     });
   }
 

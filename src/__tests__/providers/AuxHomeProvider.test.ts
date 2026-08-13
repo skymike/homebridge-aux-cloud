@@ -1,5 +1,6 @@
 import type { AuxHomeMqttMessage } from '../../api/auxhome/AuxHomeMqttSession';
 import type { AuxHomeDeviceRecord, AuxHomeSession } from '../../api/auxhome/AuxHomeTypes';
+import { AuxHomeRestError } from '../../api/auxhome/AuxHomeRestClient';
 import { AuxHomeProvider } from '../../api/providers/AuxHomeProvider';
 import { createProvider } from '../../api/providers/createProvider';
 
@@ -26,6 +27,7 @@ class FakeMqttSession {
   public readonly close = jest.fn<void, []>();
 
   private listener?: (message: AuxHomeMqttMessage) => void;
+  private authListener?: (error: Error) => void;
 
   public onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void {
     this.listener = listener;
@@ -36,6 +38,15 @@ class FakeMqttSession {
 
   public isConnected(): boolean {
     return this.connected;
+  }
+
+  public onAuthenticationFailure(listener: (error: Error) => void): () => void {
+    this.authListener = listener;
+    return () => { this.authListener = undefined; };
+  }
+
+  public emitAuthenticationFailure(): void {
+    this.authListener?.(new Error('AUX Home MQTT authentication rejected'));
   }
 
   public emit(payload: Buffer, deviceId = DEVICE_ID): void {
@@ -85,7 +96,7 @@ describe('AuxHomeProvider', () => {
     jest.useRealTimers();
   });
 
-  test('logs in once without retaining account credentials for later calls', async () => {
+  test('reuses an established session without logging in again', async () => {
     const { provider, restClient } = setup();
 
     await provider.ensureLoggedIn('first-account@example.test', 'first-password');
@@ -93,6 +104,23 @@ describe('AuxHomeProvider', () => {
 
     expect(restClient.login).toHaveBeenCalledTimes(1);
     expect(restClient.login).toHaveBeenCalledWith('first-account@example.test', 'first-password');
+  });
+
+  test('coalesces concurrent view login into one REST session and one MQTT session', async () => {
+    const restClient = new FakeRestClient();
+    const mqtt = new FakeMqttSession();
+    let resolveLogin!: (session: AuxHomeSession) => void;
+    restClient.login.mockImplementation(() => new Promise((resolve) => { resolveLogin = resolve; }));
+    const mqttSessionFactory = jest.fn(() => mqtt);
+    const provider = new AuxHomeProvider({ restClient, mqttSessionFactory });
+
+    const hapLogin = provider.ensureLoggedIn('synthetic-account', 'synthetic-password');
+    const matterLogin = provider.ensureLoggedIn('synthetic-account', 'synthetic-password');
+    resolveLogin({ uid: 'synthetic-user', token: 'synthetic-token' });
+    await Promise.all([hapLogin, matterLogin]);
+
+    expect(restClient.login).toHaveBeenCalledTimes(1);
+    expect(mqttSessionFactory).toHaveBeenCalledTimes(1);
   });
 
   test('normalizes REST records without device passcodes, passwords, or opaque metadata', async () => {
@@ -251,6 +279,61 @@ describe('AuxHomeProvider', () => {
     expect(restClient.invalidateSession).toHaveBeenCalledTimes(2);
     expect(mqtt.close).toHaveBeenCalledTimes(2);
     expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('performs exactly one relogin and MQTT recreation after REST authentication rejection', async () => {
+    const restClient = new FakeRestClient();
+    const mqttOne = new FakeMqttSession();
+    const mqttTwo = new FakeMqttSession();
+    const mqttSessions = [mqttOne, mqttTwo];
+    restClient.login
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-one' })
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-two' });
+    restClient.listDevices
+      .mockRejectedValueOnce(new AuxHomeRestError('auth', 'request rejected'))
+      .mockResolvedValueOnce([deviceRecord()]);
+    const provider = new AuxHomeProvider({ restClient, mqttSessionFactory: () => mqttSessions.shift()! });
+
+    await provider.ensureLoggedIn('synthetic-account@example.test', 'synthetic-password');
+    await expect(provider.listDevices()).resolves.toHaveLength(1);
+    expect(restClient.login).toHaveBeenCalledTimes(2);
+    expect(restClient.listDevices).toHaveBeenCalledTimes(2);
+    expect(mqttOne.close).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps healthy MQTT and does not relogin after transient REST failure', async () => {
+    const { mqtt, provider, restClient } = setup();
+    await provider.ensureLoggedIn('synthetic-account@example.test', 'synthetic-password');
+    restClient.listDevices.mockRejectedValue(new AuxHomeRestError('network', 'request failed'));
+
+    await expect(provider.listDevices()).rejects.toThrow('request failed');
+    expect(restClient.login).toHaveBeenCalledTimes(1);
+    expect(mqtt.close).not.toHaveBeenCalled();
+  });
+
+  test('attempts MQTT authentication recovery only once without a stale-credential loop', async () => {
+    const restClient = new FakeRestClient();
+    const mqttOne = new FakeMqttSession();
+    const mqttTwo = new FakeMqttSession();
+    const sessions = [mqttOne, mqttTwo];
+    restClient.login
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-one' })
+      .mockResolvedValueOnce({ uid: 'synthetic-user', token: 'session-two' });
+    restClient.listDevices.mockResolvedValue([deviceRecord()]);
+    const provider = new AuxHomeProvider({ restClient, mqttSessionFactory: () => sessions.shift()! });
+    await provider.ensureLoggedIn('sensitive-account', 'sensitive-password');
+    await provider.listDevices();
+
+    mqttOne.emitAuthenticationFailure();
+    await Promise.resolve();
+    await Promise.resolve();
+    mqttTwo.emitAuthenticationFailure();
+    await Promise.resolve();
+
+    expect(restClient.login).toHaveBeenCalledTimes(2);
+    expect(mqttOne.close).toHaveBeenCalledTimes(1);
+    expect(mqttTwo.connect).toHaveBeenCalledWith([{ did: DEVICE_ID }]);
+    expect(JSON.stringify(restClient.login.mock.results)).not.toContain('sensitive-password');
   });
 });
 

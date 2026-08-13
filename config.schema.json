@@ -121,6 +121,14 @@
                 "maximum": 15000,
                 "description": "Timeout in milliseconds for each cloud command attempt. If the cloud doesn't respond within this time, the next retry is triggered."
             },
+            "requestTimeoutMs": {
+                "title": "REST Request Timeout (ms)",
+                "type": "integer",
+                "default": 5000,
+                "minimum": 1000,
+                "maximum": 30000,
+                "description": "Timeout for AUX cloud REST requests, independent from MQTT command confirmation."
+            },
             "controlStrategy": {
                 "title": "Control Strategy",
                 "type": "string",

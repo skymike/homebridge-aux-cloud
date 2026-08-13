@@ -101,7 +101,7 @@ All devices in your AUX Cloud account are discovered automatically — no `devic
 }
 ```
 
-The plugin keeps the supplied credentials and the resulting session material in process memory only. Do not share your Homebridge configuration, account information, device identifiers, or transport diagnostics in support requests.
+Homebridge persists the username and password in its platform configuration. The plugin makes no additional persistent copy; it keeps only the credentials and session material needed for bounded authentication recovery in process memory and clears them when the provider closes. Do not share your Homebridge configuration, account information, device identifiers, or transport diagnostics in support requests.
 
 #### Supported AUX Home controls
 
@@ -178,6 +178,7 @@ Use this mode to get the responsiveness of local control while retaining cloud a
 | `expose` | `hap` / `matter` / `both` | `hap` | Platform exposure mode. `hap` = HomeKit only (default). `matter` = Matter only (replaces HAP). `both` = HAP for Apple Home + Matter for Alexa/Google simultaneously. Requires Homebridge 2.x with Matter plugin for `matter` or `both`. |
 | `commandRetryCount` | integer (0–5) | `2` | Cloud command retry attempts before failing |
 | `commandTimeoutMs` | integer (1000–15000) | `5000` | Per-attempt cloud command timeout in ms |
+| `requestTimeoutMs` | integer (1000–30000) | `5000` | REST request timeout in ms, independent from command confirmation |
 | `includeDeviceIds` | string[] | `[]` | Only expose these cloud endpoint IDs (empty = all) |
 | `excludeDeviceIds` | string[] | `[]` | Hide these cloud endpoint IDs |
 | `devices` | array | `[]` | LAN device list (see below) |

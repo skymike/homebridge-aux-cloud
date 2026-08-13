@@ -16,7 +16,7 @@ class FakeMqttClient implements AuxHomeMqttClient {
 
   private readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-  public on(event: 'connect' | 'close' | 'message', listener: (...args: unknown[]) => void): this {
+  public on(event: 'connect' | 'close' | 'message' | 'error', listener: (...args: unknown[]) => void): this {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), listener]);
     return this;
   }
@@ -33,7 +33,7 @@ class FakeMqttClient implements AuxHomeMqttClient {
     this.ended = true;
   }
 
-  public emit(event: 'connect' | 'close' | 'message', ...args: unknown[]): void {
+  public emit(event: 'connect' | 'close' | 'message' | 'error', ...args: unknown[]): void {
     for (const listener of this.handlers.get(event) ?? []) {
       listener(...args);
     }
@@ -135,6 +135,28 @@ describe('AuxHomeMqttSession', () => {
     expect(clients[1].subscriptions).toEqual(['dev2app/did1/#']);
   });
 
+  test('uses the full capped reconnect schedule and resets after a successful connection', () => {
+    jest.useFakeTimers();
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
+    session.connect([{ did: 'did1' }]);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+      clients[clients.length - 1].emit('close');
+      const count = clients.length;
+      jest.advanceTimersByTime(delay - 1);
+      expect(clients).toHaveLength(count);
+      jest.advanceTimersByTime(1);
+      expect(clients).toHaveLength(count + 1);
+    }
+    clients[clients.length - 1].emit('connect');
+    clients[clients.length - 1].emit('close');
+    const count = clients.length;
+    jest.advanceTimersByTime(999);
+    expect(clients).toHaveLength(count);
+    jest.advanceTimersByTime(1);
+    expect(clients).toHaveLength(count + 1);
+  });
+
   test('ignores messages from a stale client after reconnecting', () => {
     jest.useFakeTimers();
     const { clients, connector } = createConnector();
@@ -203,5 +225,20 @@ describe('AuxHomeMqttSession', () => {
     jest.advanceTimersByTime(30_000);
 
     expect(clients).toHaveLength(1);
+  });
+
+  test('reports authentication rejection without exposing broker details and ignores transient errors', () => {
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({ uid: 'sensitive-uid', token: 'sensitive-token', connector });
+    const failures: Error[] = [];
+    session.onAuthenticationFailure((error) => failures.push(error));
+    session.connect([{ did: 'sensitive-device' }]);
+
+    clients[0].emit('error', Object.assign(new Error('socket reset sensitive-token'), { code: 'ECONNRESET' }));
+    clients[0].emit('error', Object.assign(new Error('Not authorized sensitive-token'), { reasonCode: 135 }));
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0].message).toBe('AUX Home MQTT authentication rejected');
+    expect(failures[0].message).not.toContain('sensitive');
   });
 });

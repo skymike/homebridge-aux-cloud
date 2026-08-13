@@ -17,7 +17,7 @@ export interface AuxHomeMqttConnectOptions extends AuxHomeMqttCredentials {
 }
 
 export interface AuxHomeMqttClient {
-  on(event: 'connect' | 'close' | 'message', listener: (...args: unknown[]) => void): this;
+  on(event: 'connect' | 'close' | 'message' | 'error', listener: (...args: unknown[]) => void): this;
   subscribe(topic: string): void;
   publish(topic: string, payload: Buffer | string): void;
   end(): void;
@@ -63,6 +63,7 @@ export class AuxHomeMqttSession {
   private readonly jitter: () => number;
 
   private readonly listeners = new Set<(message: AuxHomeMqttMessage) => void>();
+  private readonly authenticationFailureListeners = new Set<(error: Error) => void>();
 
   private client?: AuxHomeMqttClient;
 
@@ -113,6 +114,11 @@ export class AuxHomeMqttSession {
     return () => this.listeners.delete(listener);
   }
 
+  public onAuthenticationFailure(listener: (error: Error) => void): () => void {
+    this.authenticationFailureListeners.add(listener);
+    return () => this.authenticationFailureListeners.delete(listener);
+  }
+
   public isConnected(): boolean {
     return this.connected;
   }
@@ -148,6 +154,7 @@ export class AuxHomeMqttSession {
     client.on('connect', () => this.handleConnect(client));
     client.on('close', () => this.handleClose(client));
     client.on('message', (topic, payload) => this.handleMessage(client, topic, payload));
+    client.on('error', (error) => this.handleError(client, error));
   }
 
   private handleConnect(client: AuxHomeMqttClient): void {
@@ -182,6 +189,22 @@ export class AuxHomeMqttSession {
     const message = { deviceId, payload };
     for (const listener of this.listeners) {
       listener(message);
+    }
+  }
+
+  private handleError(client: AuxHomeMqttClient, value: unknown): void {
+    if (this.closed || this.client !== client) {
+      return;
+    }
+    const details = value as { code?: unknown; reasonCode?: unknown; message?: unknown };
+    const code = Number(details.code ?? details.reasonCode);
+    const message = typeof details.message === 'string' ? details.message.toLowerCase() : '';
+    if (![4, 5, 134, 135].includes(code) && !/auth|not authorized|bad user/.test(message)) {
+      return;
+    }
+    const sanitized = new Error('AUX Home MQTT authentication rejected');
+    for (const listener of this.authenticationFailureListeners) {
+      listener(sanitized);
     }
   }
 

@@ -9,8 +9,7 @@ export interface AuxHomeSession {
   token: string;
 }
 
-export interface AuxHomeDeviceRecord {
-  endpointId: string;
+export interface AuxHomeRawDeviceRecord {
   deviceId?: string;
   did: string;
   alias?: string;
@@ -23,4 +22,8 @@ export interface AuxHomeDeviceRecord {
   status?: Record<string, unknown>;
   feature?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface AuxHomeDeviceRecord extends AuxHomeRawDeviceRecord {
+  endpointId: string;
 }

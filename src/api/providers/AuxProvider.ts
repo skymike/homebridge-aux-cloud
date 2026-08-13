@@ -9,6 +9,13 @@ export interface DeviceQueryOptions {
 
 export type AuxProviderStateListener = (device: AuxDevice) => void;
 
+export class AuxProviderCommandSupersededError extends Error {
+  constructor() {
+    super('A newer AUX Home command replaced the pending command');
+    this.name = 'AuxProviderCommandSupersededError';
+  }
+}
+
 export interface AuxProvider {
   readonly kind: AuxProviderKind;
   ensureLoggedIn(identifier: string, password: string): Promise<void>;

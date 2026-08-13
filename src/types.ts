@@ -23,6 +23,7 @@ export const ALLOWED_FEATURE_SWITCHES: FeatureSwitchKey[] = [
 
 export interface AuxCloudPlatformDependencies {
   providerFactory?: (options: CreateProviderOptions) => AuxProvider;
+  closeProviderOnUnload?: boolean;
 }
 
 export interface AuxCloudPlatformConfig extends PlatformConfig {
@@ -40,6 +41,7 @@ export interface AuxCloudPlatformConfig extends PlatformConfig {
   // Optimistic UI settings
   commandRetryCount?: number;
   commandTimeoutMs?: number;
+  requestTimeoutMs?: number;
 
   // Local (LAN) control settings
   controlStrategy?: 'local-first' | 'cloud-only';

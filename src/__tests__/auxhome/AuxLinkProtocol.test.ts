@@ -48,6 +48,12 @@ describe('AUXLink protocol', () => {
     expect(parseAuxLinkStatePayload(payload)).toEqual({});
   });
 
+  it('rejects a 25-byte state frame with one invalid signature byte', () => {
+    const frame = Buffer.from('bb00070000010f000111880081a0002000002000000005372c', 'hex');
+    frame[8] ^= 0x01;
+    expect(parseAuxLinkStatePayload(frame)).toEqual({});
+  });
+
   it('builds a complete-state direct command', () => {
     const params = {
       pwr: 1, temp: 255, ac_mode: 0, ac_mark: 0,

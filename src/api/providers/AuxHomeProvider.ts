@@ -5,14 +5,19 @@ import {
   AuxHomeMqttSession,
   type AuxHomeMqttMessage,
 } from '../auxhome/AuxHomeMqttSession';
-import { AuxHomeRestClient } from '../auxhome/AuxHomeRestClient';
+import { AuxHomeRestClient, AuxHomeRestError } from '../auxhome/AuxHomeRestClient';
 import type { AuxHomeDeviceRecord, AuxHomeSession } from '../auxhome/AuxHomeTypes';
 import {
   auxLinkStateToParams,
   buildAuxLinkCommandPayload,
   parseAuxLinkStatePayload,
 } from '../auxhome/AuxLinkProtocol';
-import type { AuxProvider, AuxProviderStateListener, DeviceQueryOptions } from './AuxProvider';
+import {
+  AuxProviderCommandSupersededError,
+  type AuxProvider,
+  type AuxProviderStateListener,
+  type DeviceQueryOptions,
+} from './AuxProvider';
 
 const AUX_LINK_STATE_QUERY = Buffer.from('bb0006800000020011012b7e', 'hex');
 
@@ -26,6 +31,7 @@ interface AuxHomeMqttConnection {
   connect(devices: readonly { did: string }[]): void;
   publish(deviceId: string, payload: Buffer | string): void;
   onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void;
+  onAuthenticationFailure?(listener: (error: Error) => void): () => void;
   isConnected(): boolean;
   close(): void;
 }
@@ -63,6 +69,12 @@ export class AuxHomeProvider implements AuxProvider {
   private mqtt?: AuxHomeMqttConnection;
 
   private unsubscribeMqtt?: () => void;
+  private unsubscribeMqttAuth?: () => void;
+  private credentials?: { identifier: string; password: string };
+  private authRecoveryAttempted = false;
+  private authRecovery?: Promise<void>;
+  private loginPromise?: Promise<void>;
+  private closed = false;
 
   private readonly deviceRecords = new Map<string, AuxHomeDeviceRecord>();
 
@@ -75,22 +87,27 @@ export class AuxHomeProvider implements AuxProvider {
   private readonly pendingCommands = new Map<string, PendingCommand>();
 
   constructor(options: AuxHomeProviderOptions = {}) {
-    this.restClient = options.restClient ?? new AuxHomeRestClient();
+    this.restClient = options.restClient ?? new AuxHomeRestClient({ requestTimeoutMs: options.requestTimeoutMs });
     this.mqttSessionFactory = options.mqttSessionFactory ?? ((session) => new AuxHomeMqttSession(session));
-    this.commandTimeoutMs = options.commandTimeoutMs ?? options.requestTimeoutMs ?? 5_000;
+    this.commandTimeoutMs = options.commandTimeoutMs ?? 5_000;
     this.now = options.now ?? (() => new Date());
   }
 
   public async ensureLoggedIn(identifier: string, password: string): Promise<void> {
+    this.closed = false;
     if (this.session) {
       return;
     }
+    if (this.loginPromise) {
+      await this.loginPromise;
+      return;
+    }
 
-    const session = await this.restClient.login(identifier, password);
-    this.session = { ...session };
-    const mqtt = this.mqttSessionFactory(this.session);
-    this.mqtt = mqtt;
-    this.unsubscribeMqtt = mqtt.onMessage((message) => this.handleMessage(message));
+    this.credentials = { identifier, password };
+    this.loginPromise ??= this.createAuthenticatedSession(identifier, password)
+      .then(() => { this.authRecoveryAttempted = false; })
+      .finally(() => { this.loginPromise = undefined; });
+    await this.loginPromise;
   }
 
   public async listDevices(options: DeviceQueryOptions = {}): Promise<AuxDevice[]> {
@@ -98,7 +115,17 @@ export class AuxHomeProvider implements AuxProvider {
       throw new Error('AUX Home session is not authenticated');
     }
 
-    const records = (await this.restClient.listDevices()).filter((record) => this.isIncluded(record.did, options));
+    let rawRecords: AuxHomeDeviceRecord[];
+    try {
+      rawRecords = await this.restClient.listDevices();
+    } catch (error) {
+      if (!(error instanceof AuxHomeRestError) || error.kind !== 'auth' || this.authRecoveryAttempted) {
+        throw error;
+      }
+      await this.recoverAuthentication();
+      rawRecords = await this.restClient.listDevices();
+    }
+    const records = rawRecords.filter((record) => this.isIncluded(record.did, options));
     this.deviceRecords.clear();
     this.devices.clear();
 
@@ -135,7 +162,7 @@ export class AuxHomeProvider implements AuxProvider {
     const changes = this.numericParams(values);
     const payload = buildAuxLinkCommandPayload({ ...confirmed, ...changes });
 
-    this.rejectPending(device.endpointId, new Error('A newer AUX Home command replaced the pending command'));
+    this.rejectPending(device.endpointId, new AuxProviderCommandSupersededError());
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(device.endpointId);
@@ -175,8 +202,57 @@ export class AuxHomeProvider implements AuxProvider {
   }
 
   public close(): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+    this.closed = true;
     this.clearRuntimeState(new Error('AUX Home provider closed'), true);
+    this.credentials = undefined;
     return Promise.resolve();
+  }
+
+  private async createAuthenticatedSession(identifier: string, password: string): Promise<AuxHomeMqttConnection> {
+    const session = await this.restClient.login(identifier, password);
+    if (this.closed) {
+      this.restClient.invalidateSession();
+      throw new Error('AUX Home provider closed');
+    }
+    this.session = { ...session };
+    const mqtt = this.mqttSessionFactory(this.session);
+    this.mqtt = mqtt;
+    this.unsubscribeMqtt = mqtt.onMessage((message) => this.handleMessage(message));
+    this.unsubscribeMqttAuth = mqtt.onAuthenticationFailure?.(() => {
+      if (!this.authRecoveryAttempted) {
+        void this.recoverAuthentication().catch(() => undefined);
+      }
+    });
+    return mqtt;
+  }
+
+  private recoverAuthentication(): Promise<void> {
+    if (this.authRecovery) {
+      return this.authRecovery;
+    }
+    const credentials = this.credentials;
+    if (!credentials) {
+      return Promise.reject(new AuxHomeRestError('auth', 'AUX Home authentication recovery unavailable'));
+    }
+    this.authRecoveryAttempted = true;
+    this.authRecovery = (async () => {
+      this.unsubscribeMqtt?.();
+      this.unsubscribeMqttAuth?.();
+      this.unsubscribeMqtt = undefined;
+      this.unsubscribeMqttAuth = undefined;
+      this.mqtt?.close();
+      this.mqtt = undefined;
+      this.session = undefined;
+      this.restClient.invalidateSession();
+      const mqtt = await this.createAuthenticatedSession(credentials.identifier, credentials.password);
+      mqtt.connect([...this.deviceRecords.keys()].map((did) => ({ did })));
+    })().finally(() => {
+      this.authRecovery = undefined;
+    });
+    return this.authRecovery;
   }
 
   private handleMessage(message: AuxHomeMqttMessage): void {
@@ -265,7 +341,9 @@ export class AuxHomeProvider implements AuxProvider {
       this.rejectPending(deviceId, error);
     }
     this.unsubscribeMqtt?.();
+    this.unsubscribeMqttAuth?.();
     this.unsubscribeMqtt = undefined;
+    this.unsubscribeMqttAuth = undefined;
     this.mqtt?.close();
     this.mqtt = undefined;
     this.session = undefined;

@@ -3,6 +3,7 @@ import type { Logger } from 'homebridge';
 import type { AuxDevice } from '../api/AuxCloudClient';
 import { AuxDeviceControl } from '../api/AuxDeviceControl';
 import type { AuxProviderKind } from '../api/providers/AuxProvider';
+import { AuxProviderCommandSupersededError } from '../api/providers/AuxProvider';
 
 const ENDPOINT_ID = 'dev2app/topic-derived-device/state';
 const LAN_IP = '192.0.2.77';
@@ -109,5 +110,29 @@ describe('AuxDeviceControl provider-specific identifier redaction', () => {
     await expect(cloudControl.sendCommand(makeDevice(), { pwr: 0 }, {
       globalStrategy: 'cloud-only', cloudRetryCount: 0,
     })).rejects.toThrow(`Failed to control ${ENDPOINT_ID} after 1 cloud attempts`);
+  });
+
+  test('does not retry a superseded AUX Home command after a newer desired state', async () => {
+    jest.useFakeTimers();
+    const published: Record<string, number>[] = [];
+    const provider = {
+      kind: 'aux-home' as const,
+      setDeviceParams: jest.fn(async (_device: AuxDevice, params: Record<string, number>) => {
+        published.push(params);
+        if (params['ac_mode'] === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          throw new AuxProviderCommandSupersededError();
+        }
+      }),
+    };
+    const control = new AuxDeviceControl({ cloudProvider: provider });
+    const first = control.sendCommand(makeDevice(), { pwr: 1 }, { cloudRetryCount: 2 });
+    jest.advanceTimersByTime(400);
+    const second = control.sendCommand(makeDevice(), { pwr: 1, ac_mode: 1 }, { cloudRetryCount: 2 });
+    await second;
+    jest.advanceTimersByTime(200);
+    await expect(first).rejects.toBeInstanceOf(AuxProviderCommandSupersededError);
+    expect(published).toEqual([{ pwr: 1 }, { pwr: 1, ac_mode: 1 }]);
+    jest.useRealTimers();
   });
 });
