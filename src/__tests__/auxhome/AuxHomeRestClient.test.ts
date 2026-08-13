@@ -76,7 +76,7 @@ describe('AuxHomeRestClient', () => {
     expect(requests[2].headers?.['authorization']).toBe('bearer test-session-credential');
   });
 
-  it('redacts authentication failures and invalidates the in-memory session', async () => {
+  it('redacts authentication failures', async () => {
     const transport = {
       request: jest.fn(async (request: RequestConfig) => {
         if (request.url === '/auth/getPubkey') {
@@ -90,7 +90,38 @@ describe('AuxHomeRestClient', () => {
     await expect(client.login('sensitive-account-value', 'sensitive-password-value'))
       .rejects.toThrow('AUX Home request failed (401): request rejected');
     await expect(client.listDevices()).rejects.toThrow('AUX Home session is not authenticated');
+  });
+
+  it('clears a successful in-memory session before another authenticated operation', async () => {
+    const requests: RequestConfig[] = [];
+    const publicKeyBase64 = makePublicKeyBase64();
+    const transport = {
+      request: jest.fn(async (request: RequestConfig) => {
+        requests.push(request);
+        if (request.url === '/auth/getPubkey') {
+          return { data: { code: 0, message: 'ok', data: { publicKey: publicKeyBase64 } } };
+        }
+        if (request.url === '/auth/login/pwd') {
+          return {
+            data: {
+              code: 0,
+              message: 'ok',
+              data: { appUser: { uid: 'test-user' }, token: { token: 'test-session-credential' } },
+            },
+          };
+        }
+        return { data: { code: 0, message: 'ok', data: [] } };
+      }),
+    };
+    const client = new AuxHomeRestClient({ transport });
+
+    await client.login('synthetic.account@example.test', 'synthetic-password');
+    await expect(client.listDevices()).resolves.toEqual([]);
+    expect(requests[2].headers?.['authorization']).toBe('bearer test-session-credential');
+
     client.invalidateSession();
+
     await expect(client.listDevices()).rejects.toThrow('AUX Home session is not authenticated');
+    expect(requests).toHaveLength(3);
   });
 });
