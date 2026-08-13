@@ -54,6 +54,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
 
   public readonly commandRetryCount: number;
   public readonly commandTimeoutMs: number;
+  public readonly redactDeviceIdentifiers: boolean;
   public readonly enableHomeKit: boolean;
 
   private readonly handlers = new Map<string, AuxCloudPlatformAccessory>();
@@ -129,6 +130,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       logger: this.log,
       requestTimeoutMs: this.commandTimeoutMs,
     });
+    this.redactDeviceIdentifiers = this.provider.kind === 'aux-home';
 
     // Device control with local/cloud selection — share the platform's logged-in client
     this.deviceControl = new AuxDeviceControl({
@@ -173,16 +175,24 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
         }
         for (const dev of discovered) {
           this.deviceControl.registerDiscoveredDevice(dev);
-          this.log.info('Discovered Broadlink device: %s (MAC: %s)', dev.ip, dev.mac);
+          if (this.redactDeviceIdentifiers) {
+            this.log.info('Discovered Broadlink device for AUX Home local control');
+          } else {
+            this.log.info('Discovered Broadlink device: %s (MAC: %s)', dev.ip, dev.mac);
+          }
         }
         if (discovered.length === 0) {
           this.log.warn('[Aux Cloud] LAN discovery found no devices via broadcast. Using static IP/MAC from config.');
         }
       } catch (error) {
         if ((this.config.devices ?? []).filter((d) => d.ip && d.mac).length === 0) {
-          throw error;
+          throw this.redactDeviceIdentifiers ? new Error('AUX Home LAN discovery failed') : error;
         }
-        this.log.warn('[Aux Cloud] LAN discovery broadcast failed (%s). Using static IP/MAC from config.', error);
+        if (this.redactDeviceIdentifiers) {
+          this.log.warn('[Aux Cloud] LAN discovery broadcast failed. Using configured local device');
+        } else {
+          this.log.warn('[Aux Cloud] LAN discovery broadcast failed (%s). Using static IP/MAC from config.', error);
+        }
       }
     }
 
@@ -276,7 +286,11 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log.error('Failed to control AUX cloud device: %s', message);
+      if (this.redactDeviceIdentifiers) {
+        this.log.error('Failed to control AUX Home device');
+        throw new AuxApiError('Failed to control AUX Home device');
+      }
+      this.log.error('Failed to control %s: %s. Params: %o', device.endpointId, message, params);
       throw new AuxApiError(message);
     }
   }
@@ -439,7 +453,11 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
         this.log.debug('Fetched %d AUX Cloud devices', cloudDevices.length);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.log.warn('Failed to fetch AUX Cloud devices: %s', message);
+        if (this.redactDeviceIdentifiers) {
+          this.log.warn('Failed to fetch AUX Home devices');
+        } else {
+          this.log.warn('Failed to fetch AUX Cloud devices: %s', message);
+        }
         // If cloud fails, use cached devices so cloud devices don't disappear as stale
         cloudDevices = this.lastKnownCloudDevices.length > 0
           ? this.lastKnownCloudDevices
@@ -462,11 +480,19 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
             if (localParams != null) {
               device.params = { ...device.params, ...localParams };
               device.state = 1;
-              this.log.info('[LAN] Poll OK for %s', device.endpointId);
+              if (this.redactDeviceIdentifiers) {
+                this.log.info('[LAN] AUX Home poll succeeded');
+              } else {
+                this.log.info('[LAN] Poll OK for %s', device.endpointId);
+              }
             }
           } catch {
             this.deviceControl.recordFailure(device.endpointId);
-            this.log.warn('[LAN] Poll failed for %s', device.endpointId);
+            if (this.redactDeviceIdentifiers) {
+              this.log.warn('[LAN] AUX Home poll failed');
+            } else {
+              this.log.warn('[LAN] Poll failed for %s', device.endpointId);
+            }
           }
         }));
       }
@@ -509,8 +535,21 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       seen.add(uuid);
 
       if (!isKnownDevice) {
-        this.log.info('Discovered AUX device "%s"', device.friendlyName);
-        this.log.debug('Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure');
+        if (this.redactDeviceIdentifiers) {
+          this.log.info('Discovered AUX device "%s"', device.friendlyName);
+          this.log.debug('Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure');
+        } else {
+          this.log.info(
+            'Discovered AUX device "%s" (endpointId: %s, productId: %s)',
+            device.friendlyName,
+            device.endpointId,
+            device.productId,
+          );
+          this.log.debug(
+            'Use includeDeviceIds/excludeDeviceIds in the plugin configuration to control exposure (%s)',
+            device.endpointId,
+          );
+        }
       }
 
       const existingAccessory = this.accessories.find((accessory) => accessory.UUID === uuid);

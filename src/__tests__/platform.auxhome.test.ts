@@ -8,6 +8,19 @@ import { AuxCloudPlatformProxy } from '../Platform.Proxy';
 import { AuxCloudPlatform } from '../platform';
 
 const ENDPOINT_ID = 'synthetic-platform-device';
+const SENSITIVE_ENDPOINT_ID = 'dev2app/topic-derived-device/state';
+const SENSITIVE_UUID = `uuid-${SENSITIVE_ENDPOINT_ID}`;
+const SENSITIVE_LAN_IP = '192.0.2.88';
+const SENSITIVE_LAN_MAC = '02:00:00:00:00:88';
+
+jest.mock('../api/broadlink/DeviceDiscovery', () => ({
+  DeviceDiscovery: {
+    discover: jest.fn().mockResolvedValue([{
+      ip: SENSITIVE_LAN_IP,
+      mac: SENSITIVE_LAN_MAC,
+    }]),
+  },
+}));
 
 function makeDevice(overrides: Partial<AuxDevice> = {}): AuxDevice {
   return {
@@ -184,7 +197,7 @@ describe('active proxy platform AUX Home push integration', () => {
 
     base.provider.setDeviceParams.mockRejectedValue(new Error('synthetic transport failure'));
     await expect(hap.sendDeviceParamsWithRetry(makeDevice(), { pwr: 1 }, 0))
-      .rejects.toThrow('Failed to control AUX cloud device after 1 cloud attempts');
+      .rejects.toThrow('Failed to control AUX Home device');
     expect(JSON.stringify((base.platform.log.error as jest.Mock).mock.calls)).not.toContain(ENDPOINT_ID);
     hap.onPlatformUnload();
     expect(base.provider.close).toHaveBeenCalledTimes(1);
@@ -240,5 +253,82 @@ describe('active proxy platform AUX Home push integration', () => {
 
     expect(hapUnload).toHaveBeenCalledTimes(1);
     expect(matterUnload).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['HAP', AuxCloudHAPPlatform],
+    ['Matter', AuxCloudMatterPlatform],
+  ] as const)('redacts AUX Home identifiers across the active Proxy→%s LAN path', async (_name, PlatformClass) => {
+    const base = makePlatformHarness();
+    base.provider.listDevices.mockResolvedValue([makeDevice({
+      endpointId: SENSITIVE_ENDPOINT_ID,
+      mac: SENSITIVE_LAN_MAC,
+    })]);
+    const api = {
+      ...base.api,
+      packageJSON: { version: '0.0.0-test' },
+      matter: {
+        uuid: { generate: (id: string) => `uuid-${id}` },
+        deviceTypes: { Thermostat: 'Thermostat', Fan: 'Fan', OnOffSwitch: 'OnOffSwitch' },
+        registerPlatformAccessories: jest.fn().mockResolvedValue(undefined),
+        unregisterPlatformAccessories: jest.fn().mockResolvedValue(undefined),
+        updateAccessoryState: jest.fn().mockResolvedValue(undefined),
+      },
+      platformAccessory: jest.fn(),
+    } as unknown as API;
+    const platform = new PlatformClass(base.platform.log, {
+      platform: 'AUXCloud', name: 'Redaction test', username: 'synthetic', password: 'synthetic',
+      localControlEnabled: true,
+    } as PlatformConfig, api, { providerFactory: () => base.provider });
+    const control = (platform as unknown as { deviceControl: { pollLocalState: jest.Mock } }).deviceControl;
+    control.pollLocalState = jest.fn().mockRejectedValue(new Error(
+      `${SENSITIVE_ENDPOINT_ID}/${SENSITIVE_UUID}/${SENSITIVE_LAN_IP}/${SENSITIVE_LAN_MAC}`,
+    ));
+    if (platform instanceof AuxCloudHAPPlatform) {
+      const accessory = {
+        UUID: SENSITIVE_UUID,
+        displayName: 'Synthetic safe alias',
+        context: { device: { endpointId: SENSITIVE_ENDPOINT_ID } },
+      } as unknown as PlatformAccessory;
+      platform.accessories.push(accessory);
+      (platform as unknown as { handlers: Map<string, { updateAccessory: jest.Mock }> }).handlers
+        .set(SENSITIVE_UUID, { updateAccessory: jest.fn() });
+    }
+
+    await platform.initialize();
+
+    const logs = JSON.stringify([
+      ...(base.platform.log.debug as jest.Mock).mock.calls,
+      ...(base.platform.log.info as jest.Mock).mock.calls,
+      ...(base.platform.log.warn as jest.Mock).mock.calls,
+      ...(base.platform.log.error as jest.Mock).mock.calls,
+    ]);
+    for (const identifier of [SENSITIVE_ENDPOINT_ID, SENSITIVE_UUID, SENSITIVE_LAN_IP, SENSITIVE_LAN_MAC]) {
+      expect(logs).not.toContain(identifier);
+    }
+    platform.onPlatformUnload();
+  });
+
+  test('preserves AC Freedom discovery identifiers in the active HAP path', async () => {
+    const base = makePlatformHarness();
+    const legacyProvider = new FakeProvider();
+    Object.defineProperty(legacyProvider, 'kind', { value: 'ac-freedom' });
+    legacyProvider.listDevices.mockResolvedValue([makeDevice({ endpointId: SENSITIVE_ENDPOINT_ID })]);
+    const hap = new AuxCloudHAPPlatform(base.platform.log, {
+      platform: 'AUXCloud', name: 'Legacy logging test', username: 'synthetic', password: 'synthetic',
+    } as PlatformConfig, base.platform.api, { providerFactory: () => legacyProvider });
+    const accessory = {
+      UUID: SENSITIVE_UUID,
+      displayName: 'Synthetic safe alias',
+      context: { device: { endpointId: SENSITIVE_ENDPOINT_ID } },
+    } as unknown as PlatformAccessory;
+    hap.accessories.push(accessory);
+    (hap as unknown as { handlers: Map<string, { updateAccessory: jest.Mock }> }).handlers
+      .set(SENSITIVE_UUID, { updateAccessory: jest.fn() });
+
+    await hap.initialize();
+
+    expect(JSON.stringify((base.platform.log.info as jest.Mock).mock.calls)).toContain(SENSITIVE_ENDPOINT_ID);
+    hap.onPlatformUnload();
   });
 });

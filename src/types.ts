@@ -67,6 +67,7 @@ export interface IAuxCloudPlatform {
   readonly temperatureStep: number;
   readonly commandTimeoutMs: number;
   readonly commandRetryCount: number;
+  readonly redactDeviceIdentifiers: boolean;
   registerPendingCommand(endpointId: string): number | null;
   completePendingCommand(endpointId: string): void;
   schedulePendingCommandCompletion(endpointId: string, delayMs: number): void;
