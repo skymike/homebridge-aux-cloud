@@ -32,6 +32,7 @@ interface AuxHomeMqttConnection {
   publish(deviceId: string, payload: Buffer | string): void;
   onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void;
   onAuthenticationFailure?(listener: (error: Error) => void): () => void;
+  onConnected?(listener: () => void): () => void;
   isConnected(): boolean;
   close(): void;
 }
@@ -70,10 +71,12 @@ export class AuxHomeProvider implements AuxProvider {
 
   private unsubscribeMqtt?: () => void;
   private unsubscribeMqttAuth?: () => void;
+  private unsubscribeMqttConnected?: () => void;
   private credentials?: { identifier: string; password: string };
-  private authRecoveryAttempted = false;
-  private authRecovery?: Promise<void>;
-  private loginPromise?: Promise<void>;
+  private recoveryUsed = false;
+  private authenticationOperation?: Promise<void>;
+  private recoveryConnectedResolve?: () => void;
+  private recoveryConnectedReject?: (error: Error) => void;
   private closed = false;
 
   private readonly deviceRecords = new Map<string, AuxHomeDeviceRecord>();
@@ -95,22 +98,24 @@ export class AuxHomeProvider implements AuxProvider {
 
   public async ensureLoggedIn(identifier: string, password: string): Promise<void> {
     this.closed = false;
-    if (this.session) {
+    if (this.authenticationOperation) {
+      await this.authenticationOperation;
       return;
     }
-    if (this.loginPromise) {
-      await this.loginPromise;
+    if (this.session) {
       return;
     }
 
     this.credentials = { identifier, password };
-    this.loginPromise ??= this.createAuthenticatedSession(identifier, password)
-      .then(() => { this.authRecoveryAttempted = false; })
-      .finally(() => { this.loginPromise = undefined; });
-    await this.loginPromise;
+    await this.runAuthenticationOperation(async () => {
+      await this.createAuthenticatedSession(identifier, password);
+    });
   }
 
   public async listDevices(options: DeviceQueryOptions = {}): Promise<AuxDevice[]> {
+    if (this.authenticationOperation) {
+      await this.authenticationOperation;
+    }
     if (!this.session || !this.mqtt) {
       throw new Error('AUX Home session is not authenticated');
     }
@@ -119,7 +124,7 @@ export class AuxHomeProvider implements AuxProvider {
     try {
       rawRecords = await this.restClient.listDevices();
     } catch (error) {
-      if (!(error instanceof AuxHomeRestError) || error.kind !== 'auth' || this.authRecoveryAttempted) {
+      if (!(error instanceof AuxHomeRestError) || error.kind !== 'auth' || this.recoveryUsed) {
         throw error;
       }
       await this.recoverAuthentication();
@@ -152,10 +157,13 @@ export class AuxHomeProvider implements AuxProvider {
     return devices;
   }
 
-  public setDeviceParams(device: AuxDevice, values: Record<string, number>): Promise<void> {
+  public async setDeviceParams(device: AuxDevice, values: Record<string, number>): Promise<void> {
+    if (this.authenticationOperation) {
+      await this.authenticationOperation;
+    }
     const mqtt = this.mqtt;
     if (!this.session || !mqtt) {
-      return Promise.reject(new Error('AUX Home session is not authenticated'));
+      throw new Error('AUX Home session is not authenticated');
     }
 
     const confirmed = this.devices.get(device.endpointId)?.params ?? device.params ?? {};
@@ -221,38 +229,89 @@ export class AuxHomeProvider implements AuxProvider {
     const mqtt = this.mqttSessionFactory(this.session);
     this.mqtt = mqtt;
     this.unsubscribeMqtt = mqtt.onMessage((message) => this.handleMessage(message));
-    this.unsubscribeMqttAuth = mqtt.onAuthenticationFailure?.(() => {
-      if (!this.authRecoveryAttempted) {
-        void this.recoverAuthentication().catch(() => undefined);
-      }
-    });
+    this.unsubscribeMqttAuth = mqtt.onAuthenticationFailure?.(() => this.handleAuthenticationFailure(mqtt));
+    this.unsubscribeMqttConnected = mqtt.onConnected?.(() => this.handleConnected(mqtt));
     return mqtt;
   }
 
   private recoverAuthentication(): Promise<void> {
-    if (this.authRecovery) {
-      return this.authRecovery;
+    if (this.authenticationOperation) {
+      return this.authenticationOperation;
     }
     const credentials = this.credentials;
     if (!credentials) {
       return Promise.reject(new AuxHomeRestError('auth', 'AUX Home authentication recovery unavailable'));
     }
-    this.authRecoveryAttempted = true;
-    this.authRecovery = (async () => {
+    this.recoveryUsed = true;
+    return this.runAuthenticationOperation(async () => {
       this.unsubscribeMqtt?.();
       this.unsubscribeMqttAuth?.();
+      this.unsubscribeMqttConnected?.();
       this.unsubscribeMqtt = undefined;
       this.unsubscribeMqttAuth = undefined;
+      this.unsubscribeMqttConnected = undefined;
       this.mqtt?.close();
       this.mqtt = undefined;
       this.session = undefined;
       this.restClient.invalidateSession();
       const mqtt = await this.createAuthenticatedSession(credentials.identifier, credentials.password);
+      const connected = new Promise<void>((resolve, reject) => {
+        this.recoveryConnectedResolve = resolve;
+        this.recoveryConnectedReject = reject;
+      });
       mqtt.connect([...this.deviceRecords.keys()].map((did) => ({ did })));
-    })().finally(() => {
-      this.authRecovery = undefined;
+      await connected;
     });
-    return this.authRecovery;
+  }
+
+  private runAuthenticationOperation(operation: () => Promise<void>): Promise<void> {
+    const promise = operation().finally(() => {
+      if (this.authenticationOperation === promise) {
+        this.authenticationOperation = undefined;
+      }
+    });
+    this.authenticationOperation = promise;
+    return promise;
+  }
+
+  private handleConnected(mqtt: AuxHomeMqttConnection): void {
+    if (this.mqtt !== mqtt) {
+      return;
+    }
+    this.recoveryUsed = false;
+    this.recoveryConnectedResolve?.();
+    this.recoveryConnectedResolve = undefined;
+    this.recoveryConnectedReject = undefined;
+  }
+
+  private handleAuthenticationFailure(mqtt: AuxHomeMqttConnection): void {
+    if (this.mqtt !== mqtt) {
+      return;
+    }
+    if (this.recoveryUsed) {
+      this.markUnavailable(new AuxHomeRestError('auth', 'AUX Home authentication rejected'));
+      return;
+    }
+    void this.recoverAuthentication().catch(() => undefined);
+  }
+
+  private markUnavailable(error: Error): void {
+    this.recoveryConnectedReject?.(error);
+    this.recoveryConnectedResolve = undefined;
+    this.recoveryConnectedReject = undefined;
+    for (const deviceId of [...this.pendingCommands.keys()]) {
+      this.rejectPending(deviceId, error);
+    }
+    this.unsubscribeMqtt?.();
+    this.unsubscribeMqttAuth?.();
+    this.unsubscribeMqttConnected?.();
+    this.unsubscribeMqtt = undefined;
+    this.unsubscribeMqttAuth = undefined;
+    this.unsubscribeMqttConnected = undefined;
+    this.mqtt?.close();
+    this.mqtt = undefined;
+    this.session = undefined;
+    this.restClient.invalidateSession();
   }
 
   private handleMessage(message: AuxHomeMqttMessage): void {
@@ -342,8 +401,10 @@ export class AuxHomeProvider implements AuxProvider {
     }
     this.unsubscribeMqtt?.();
     this.unsubscribeMqttAuth?.();
+    this.unsubscribeMqttConnected?.();
     this.unsubscribeMqtt = undefined;
     this.unsubscribeMqttAuth = undefined;
+    this.unsubscribeMqttConnected = undefined;
     this.mqtt?.close();
     this.mqtt = undefined;
     this.session = undefined;

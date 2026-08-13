@@ -64,6 +64,7 @@ export class AuxHomeMqttSession {
 
   private readonly listeners = new Set<(message: AuxHomeMqttMessage) => void>();
   private readonly authenticationFailureListeners = new Set<(error: Error) => void>();
+  private readonly connectedListeners = new Set<() => void>();
 
   private client?: AuxHomeMqttClient;
 
@@ -72,6 +73,7 @@ export class AuxHomeMqttSession {
   private connected = false;
 
   private closed = false;
+  private authenticationRejected = false;
 
   private reconnectAttempts = 0;
 
@@ -86,6 +88,9 @@ export class AuxHomeMqttSession {
   }
 
   public connect(devices: readonly AuxHomeMqttDevice[]): void {
+    if (this.authenticationRejected) {
+      return;
+    }
     const nextDevices = [...new Set(devices.map((device) => device.did).filter((deviceId) => deviceId.length > 0))];
     const existingDevices = new Set(this.devices);
     const addedDevices = nextDevices.filter((deviceId) => !existingDevices.has(deviceId));
@@ -117,6 +122,11 @@ export class AuxHomeMqttSession {
   public onAuthenticationFailure(listener: (error: Error) => void): () => void {
     this.authenticationFailureListeners.add(listener);
     return () => this.authenticationFailureListeners.delete(listener);
+  }
+
+  public onConnected(listener: () => void): () => void {
+    this.connectedListeners.add(listener);
+    return () => this.connectedListeners.delete(listener);
   }
 
   public isConnected(): boolean {
@@ -166,6 +176,9 @@ export class AuxHomeMqttSession {
     for (const deviceId of this.devices) {
       client.subscribe(stateTopic(deviceId));
     }
+    for (const listener of this.connectedListeners) {
+      listener();
+    }
   }
 
   private handleClose(client: AuxHomeMqttClient): void {
@@ -202,6 +215,12 @@ export class AuxHomeMqttSession {
     if (![4, 5, 134, 135].includes(code) && !/auth|not authorized|bad user/.test(message)) {
       return;
     }
+    this.authenticationRejected = true;
+    this.closed = true;
+    this.connected = false;
+    this.clearReconnectTimer();
+    this.client = undefined;
+    client.end();
     const sanitized = new Error('AUX Home MQTT authentication rejected');
     for (const listener of this.authenticationFailureListeners) {
       listener(sanitized);

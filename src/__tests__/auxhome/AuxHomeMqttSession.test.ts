@@ -241,4 +241,26 @@ describe('AuxHomeMqttSession', () => {
     expect(failures[0].message).toBe('AUX Home MQTT authentication rejected');
     expect(failures[0].message).not.toContain('sensitive');
   });
+
+  test('stops terminally after authentication rejection and never reconnects after broker close', () => {
+    jest.useFakeTimers();
+    const { clients, connector } = createConnector();
+    const session = new AuxHomeMqttSession({
+      uid: 'private-user-fragment', token: 'private-session-token', connector, jitter: () => 0,
+    });
+    const failures: Error[] = [];
+    session.onAuthenticationFailure((error) => failures.push(error));
+    session.connect([{ did: 'private-device-fragment' }]);
+
+    clients[0].emit('error', Object.assign(new Error('Not authorized private-session-token'), { reasonCode: 135 }));
+    clients[0].emit('error', Object.assign(new Error('Not authorized again'), { reasonCode: 135 }));
+    clients[0].emit('close');
+    jest.advanceTimersByTime(60_000);
+
+    expect(failures.map(({ message }) => message)).toEqual(['AUX Home MQTT authentication rejected']);
+    expect(clients[0].ended).toBe(true);
+    expect(clients).toHaveLength(1);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(JSON.stringify(failures)).not.toContain('private-');
+  });
 });
