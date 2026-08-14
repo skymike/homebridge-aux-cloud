@@ -101,6 +101,24 @@ describe('AuxHomeRestClient', () => {
     await expect(client.listDevices()).rejects.toThrow('AUX Home session is not authenticated');
   });
 
+  it('accepts the live public-key response envelope', async () => {
+    const publicKeyBase64 = makePublicKeyBase64();
+    const transport = {
+      request: jest.fn(async (request: RequestConfig) => {
+        if (request.url === '/auth/getPubkey') {
+          return { data: { code: 200, message: 'ok', data: publicKeyBase64 } };
+        }
+        return { data: { code: 401, message: 'unauthorized', data: null } };
+      }),
+    };
+    const client = new AuxHomeRestClient({ transport });
+
+    await expect(client.login('synthetic.account@example.test', 'synthetic-password'))
+      .rejects.toThrow('AUX Home request failed (401): request rejected');
+    expect(transport.request).toHaveBeenCalledTimes(2);
+    expect(transport.request.mock.calls[1][0]).toMatchObject({ method: 'POST', url: '/auth/login/pwd' });
+  });
+
   it('clears a successful in-memory session before another authenticated operation', async () => {
     const requests: RequestConfig[] = [];
     const publicKeyBase64 = makePublicKeyBase64();

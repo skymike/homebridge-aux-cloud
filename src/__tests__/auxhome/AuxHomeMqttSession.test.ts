@@ -4,6 +4,7 @@ import {
   type AuxHomeMqttConnectOptions,
   buildMqttCredentials,
   commandTopic,
+  isAcceptedAuxHomeBrokerCertificate,
   stateTopic,
 } from '../../api/auxhome/AuxHomeMqttSession';
 
@@ -62,15 +63,23 @@ function createConnector(): {
 describe('AUX Home MQTT identity and topics', () => {
   test('builds the application MQTT credentials', () => {
     expect(buildMqttCredentials('uid123', 'token456')).toEqual({
-      clientId: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
-      username: 'usruid123',
+      clientId: 'usruid123',
+      username: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
       password: 'token456',
     });
   });
 
+  test('accepts only the pinned AUX Home broker certificate', () => {
+    expect(isAcceptedAuxHomeBrokerCertificate(
+      'C5:30:CF:7E:53:C8:F5:71:AF:AD:95:C5:DA:40:16:D9:C3:8F:CF:12:D1:85:0B:EF:49:4E:52:D0:CB:84:D9:B2',
+    )).toBe(true);
+    expect(isAcceptedAuxHomeBrokerCertificate('00:11:22')).toBe(false);
+    expect(isAcceptedAuxHomeBrokerCertificate(undefined)).toBe(false);
+  });
+
   test('builds the state and command topics for a device', () => {
     expect(stateTopic('did123')).toBe('dev2app/did123/#');
-    expect(commandTopic('did123')).toBe('app2dev/did123');
+    expect(commandTopic('did123')).toBe('app2dev/did123/#');
   });
 });
 
@@ -89,11 +98,14 @@ describe('AuxHomeMqttSession', () => {
     expect(calls).toEqual([{
       url: 'mqtts://eu-smthome-m2m.aux-global.com:8883',
       options: {
-        clientId: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
-        username: 'usruid123',
+        clientId: 'usruid123',
+        username: '2$60b8eaa792aa4de1badf04fc20a8ba56$uid123',
         password: 'token456',
         clean: true,
-        rejectUnauthorized: true,
+        keepalive: 120,
+        protocolId: 'MQIsdp',
+        protocolVersion: 3,
+        rejectUnauthorized: false,
         reconnectPeriod: 0,
       },
     }]);
@@ -101,7 +113,7 @@ describe('AuxHomeMqttSession', () => {
     expect(clients[0].subscriptions).toEqual(['dev2app/did1/#', 'dev2app/did2/#']);
   });
 
-  test('emits only binary messages received on an AUX Home device state topic', () => {
+  test('emits only valid unwrapped messages received on an AUX Home device state topic', () => {
     const { clients, connector } = createConnector();
     const session = new AuxHomeMqttSession({ uid: 'uid123', token: 'token456', connector, jitter: () => 0 });
     const received: Array<{ deviceId: string; payload: Buffer }> = [];
@@ -111,8 +123,15 @@ describe('AuxHomeMqttSession', () => {
 
     clients[0].emit('message', 'other/did1/state', Buffer.from('ignored'));
     clients[0].emit('message', 'dev2app/did1/state', 'not-a-buffer');
-    const payload = Buffer.from([1, 2, 3]);
-    clients[0].emit('message', 'dev2app/did1/state', payload);
+    const payload = Buffer.from('bb00070000010f000111880081a0002000002000000005372c', 'hex');
+    const envelope = Buffer.from(
+      'a5a523000b007856bb00070000010f000111880081a0002000002000000005372cd140',
+      'hex',
+    );
+    const invalidEnvelope = Buffer.from(envelope);
+    invalidEnvelope[invalidEnvelope.length - 1] ^= 0x01;
+    clients[0].emit('message', 'dev2app/did1/state', invalidEnvelope);
+    clients[0].emit('message', 'dev2app/did1/state', envelope);
 
     expect(received).toEqual([{ deviceId: 'did1', payload }]);
   });
@@ -195,10 +214,13 @@ describe('AuxHomeMqttSession', () => {
     expect(() => session.publish('did1', Buffer.from('command'))).toThrow('AUX Home MQTT is disconnected');
     session.connect([{ did: 'did1' }]);
     clients[0].emit('connect');
-    const payload = Buffer.from('command');
+    const payload = Buffer.from('bb0006800000020011012b7e', 'hex');
     session.publish('did1', payload);
 
-    expect(clients[0].publications).toEqual([{ topic: 'app2dev/did1', payload }]);
+    expect(clients[0].publications).toEqual([{
+      topic: 'app2dev/did1/#',
+      payload: Buffer.from('a5a516000b000100bb0006800000020011012b7e0816', 'hex'),
+    }]);
   });
 
   test('subscribes a newly discovered device without waiting for reconnect', () => {

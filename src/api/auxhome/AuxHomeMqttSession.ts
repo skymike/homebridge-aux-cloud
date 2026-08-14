@@ -1,7 +1,15 @@
 import mqtt from 'mqtt';
+import { Duplex } from 'node:stream';
+import { connect as connectTls } from 'node:tls';
+
+import { unwrapAuxLinkMqttPayload, wrapAuxLinkMqttPayload } from './AuxLinkProtocol';
 
 const AUX_HOME_APP_ID = '60b8eaa792aa4de1badf04fc20a8ba56';
 const AUX_HOME_MQTT_URL = 'mqtts://eu-smthome-m2m.aux-global.com:8883';
+const AUX_HOME_MQTT_HOST = 'eu-smthome-m2m.aux-global.com';
+const AUX_HOME_MQTT_PORT = 8883;
+const AUX_HOME_MQTT_CERT_FINGERPRINT256 =
+  'C5:30:CF:7E:53:C8:F5:71:AF:AD:95:C5:DA:40:16:D9:C3:8F:CF:12:D1:85:0B:EF:49:4E:52:D0:CB:84:D9:B2';
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 export interface AuxHomeMqttCredentials {
@@ -12,6 +20,9 @@ export interface AuxHomeMqttCredentials {
 
 export interface AuxHomeMqttConnectOptions extends AuxHomeMqttCredentials {
   clean: boolean;
+  keepalive: number;
+  protocolId: 'MQIsdp';
+  protocolVersion: 3;
   rejectUnauthorized: boolean;
   reconnectPeriod: number;
 }
@@ -41,10 +52,87 @@ export interface AuxHomeMqttSessionOptions {
 
 export function buildMqttCredentials(uid: string, token: string): AuxHomeMqttCredentials {
   return {
-    clientId: `2$${AUX_HOME_APP_ID}$${uid}`,
-    username: `usr${uid}`,
+    clientId: `usr${uid}`,
+    username: `2$${AUX_HOME_APP_ID}$${uid}`,
     password: token,
   };
+}
+
+export function isAcceptedAuxHomeBrokerCertificate(fingerprint256: string | undefined): boolean {
+  return fingerprint256?.toUpperCase() === AUX_HOME_MQTT_CERT_FINGERPRINT256;
+}
+
+function createPinnedTlsStream(): Duplex {
+  const pendingWrites: Array<{ chunk: Buffer; callback: (error?: Error | null) => void }> = [];
+  let verified = false;
+  let finalCallback: ((error?: Error | null) => void) | undefined;
+
+  const socket = connectTls({
+    host: AUX_HOME_MQTT_HOST,
+    port: AUX_HOME_MQTT_PORT,
+    rejectUnauthorized: false,
+    servername: '',
+  });
+  const stream = new Duplex({
+    read() {
+      // Data is pushed from the TLS socket after certificate pin validation.
+    },
+    write(chunk: Buffer | string, encoding, callback) {
+      const buffer = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, encoding);
+      if (verified) {
+        socket.write(buffer, callback);
+      } else {
+        pendingWrites.push({ chunk: buffer, callback });
+      }
+    },
+    final(callback) {
+      if (verified) {
+        socket.end(callback);
+      } else {
+        finalCallback = callback;
+      }
+    },
+    destroy(error, callback) {
+      const failure = error ?? new Error('AUX Home MQTT TLS stream closed');
+      for (const pending of pendingWrites.splice(0)) {
+        pending.callback(failure);
+      }
+      finalCallback?.(failure);
+      finalCallback = undefined;
+      socket.destroy();
+      callback(error);
+    },
+  });
+
+  socket.once('secureConnect', () => {
+    const certificate = socket.getPeerCertificate();
+    if (!isAcceptedAuxHomeBrokerCertificate(certificate.fingerprint256)) {
+      stream.destroy(new Error('AUX Home MQTT TLS certificate rejected'));
+      return;
+    }
+    verified = true;
+    for (const pending of pendingWrites.splice(0)) {
+      socket.write(pending.chunk, pending.callback);
+    }
+    if (finalCallback) {
+      const callback = finalCallback;
+      finalCallback = undefined;
+      socket.end(callback);
+    }
+  });
+  socket.on('data', (data) => {
+    if (verified) {
+      stream.push(data);
+    }
+  });
+  socket.on('end', () => stream.push(null));
+  socket.on('error', (error) => stream.destroy(error));
+  socket.on('close', () => stream.destroy());
+  return stream;
+}
+
+function connectPinnedMqtt(_url: string, options: AuxHomeMqttConnectOptions): AuxHomeMqttClient {
+  return new mqtt.MqttClient(() => createPinnedTlsStream(), options) as unknown as AuxHomeMqttClient;
 }
 
 export function stateTopic(deviceId: string): string {
@@ -52,7 +140,7 @@ export function stateTopic(deviceId: string): string {
 }
 
 export function commandTopic(deviceId: string): string {
-  return `app2dev/${deviceId}`;
+  return `app2dev/${deviceId}/#`;
 }
 
 export class AuxHomeMqttSession {
@@ -77,13 +165,13 @@ export class AuxHomeMqttSession {
 
   private reconnectAttempts = 0;
 
+  private sequence = 0;
+
   private reconnectTimer?: ReturnType<typeof setTimeout>;
 
   constructor(options: AuxHomeMqttSessionOptions) {
     this.credentials = buildMqttCredentials(options.uid, options.token);
-    this.connector = options.connector ?? ((url, connectOptions) => (
-      mqtt.connect(url, connectOptions) as unknown as AuxHomeMqttClient
-    ));
+    this.connector = options.connector ?? connectPinnedMqtt;
     this.jitter = options.jitter ?? (() => Math.random() * 0.2);
   }
 
@@ -111,7 +199,9 @@ export class AuxHomeMqttSession {
     if (!this.connected || !this.client) {
       throw new Error('AUX Home MQTT is disconnected');
     }
-    this.client.publish(commandTopic(deviceId), payload);
+    const directPayload = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+    this.sequence = (this.sequence + 1) & 0xffff;
+    this.client.publish(commandTopic(deviceId), wrapAuxLinkMqttPayload(directPayload, this.sequence));
   }
 
   public onMessage(listener: (message: AuxHomeMqttMessage) => void): () => void {
@@ -152,7 +242,10 @@ export class AuxHomeMqttSession {
       client = this.connector(AUX_HOME_MQTT_URL, {
         ...this.credentials,
         clean: true,
-        rejectUnauthorized: true,
+        keepalive: 120,
+        protocolId: 'MQIsdp',
+        protocolVersion: 3,
+        rejectUnauthorized: false,
         reconnectPeriod: 0,
       });
     } catch {
@@ -199,7 +292,11 @@ export class AuxHomeMqttSession {
     if (topicSegments[0] !== 'dev2app' || !deviceId) {
       return;
     }
-    const message = { deviceId, payload };
+    const directPayload = unwrapAuxLinkMqttPayload(payload);
+    if (!directPayload) {
+      return;
+    }
+    const message = { deviceId, payload: directPayload };
     for (const listener of this.listeners) {
       listener(message);
     }

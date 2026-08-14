@@ -42,10 +42,12 @@ export interface AuxHomeDeviceQueryOptions {
   excludeIds?: Set<string>;
 }
 
-interface LoginPublicKey {
+interface LoginPublicKeyObject {
   publicKey?: string;
   publicKeyBase64?: string;
 }
+
+type LoginPublicKey = string | LoginPublicKeyObject;
 
 interface LoginResult {
   appUser?: { uid?: string };
@@ -75,7 +77,9 @@ export class AuxHomeRestClient {
 
   public async login(account: string, password: string): Promise<AuxHomeSession> {
     const publicKeyResponse = await this.request<LoginPublicKey>({ method: 'GET', url: '/auth/getPubkey' });
-    const publicKeyBase64 = publicKeyResponse.publicKey ?? publicKeyResponse.publicKeyBase64;
+    const publicKeyBase64 = typeof publicKeyResponse === 'string'
+      ? publicKeyResponse
+      : publicKeyResponse.publicKey ?? publicKeyResponse.publicKeyBase64;
     if (!publicKeyBase64) {
       throw new AuxHomeRestError('invalid-response', 'AUX Home request failed (invalid-response): request rejected');
     }
@@ -145,7 +149,7 @@ export class AuxHomeRestClient {
       throw new AuxHomeRestError('network', 'AUX Home network request failed');
     }
     const payload = response.data as MyResponse<T>;
-    if (payload.code !== 0) {
+    if (payload.code !== 0 && payload.code !== 200) {
       const kind = payload.code === 401 || payload.code === 403 ? 'auth' : 'request';
       throw new AuxHomeRestError(kind, `AUX Home request failed (${String(payload.code)}): request rejected`, payload.code);
     }
