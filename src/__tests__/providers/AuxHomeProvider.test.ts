@@ -151,10 +151,27 @@ describe('AuxHomeProvider', () => {
       cookie: '',
       mac: 'aa:bb:cc:dd:ee:01',
       params: { pwr: 0, temp: 240, ac_mode: 1, ac_mark: 0 },
-      state: 1,
+      state: 0,
       lastUpdated: '2026-08-13T10:00:00.000Z',
     });
     expect(JSON.stringify(device)).not.toContain('never-normalize');
+  });
+
+  test('does not treat an online REST record as powered on and queries real state after MQTT connects', async () => {
+    const { mqtt, provider, restClient } = setup();
+    restClient.listDevices.mockResolvedValue([deviceRecord({ status: {} })]);
+
+    await provider.ensureLoggedIn('synthetic-account@example.test', 'synthetic-password');
+    const [device] = await provider.listDevices();
+
+    expect(device.state).toBe(0);
+    expect(device.params).not.toHaveProperty('pwr');
+    expect(mqtt.publish).not.toHaveBeenCalled();
+
+    mqtt.emitConnected();
+
+    expect(mqtt.publish).toHaveBeenCalledTimes(1);
+    expect(mqtt.publish).toHaveBeenCalledWith(DEVICE_ID, STATE_QUERY);
   });
 
   test('filters discovered devices before connecting MQTT to the included device set', async () => {
@@ -421,7 +438,8 @@ describe('AuxHomeProvider', () => {
     expect(await commandResult).toBeUndefined();
     expect(restClient.login).toHaveBeenCalledTimes(2);
     expect(mqttSessionFactory).toHaveBeenCalledTimes(2);
-    expect(mqttTwo.publish).toHaveBeenCalledTimes(1);
+    expect(mqttTwo.publish).toHaveBeenCalledTimes(2);
+    expect(mqttTwo.publish).toHaveBeenNthCalledWith(1, DEVICE_ID, STATE_QUERY);
   });
 
   test('allows one later recovery only after the replacement connects and resumes pushes', async () => {

@@ -293,6 +293,9 @@ export class AuxHomeProvider implements AuxProvider {
     if (this.mqtt !== mqtt) {
       return;
     }
+    for (const deviceId of this.devices.keys()) {
+      mqtt.publish(deviceId, AUX_LINK_STATE_QUERY);
+    }
     this.recoveryUsed = false;
     this.recoveryConnectedResolve?.();
     this.recoveryConnectedResolve = undefined;
@@ -343,7 +346,7 @@ export class AuxHomeProvider implements AuxProvider {
     const updated: AuxDevice = {
       ...existing,
       params: { ...existing.params, ...incoming },
-      state: 1,
+      state: incoming.pwr ?? existing.params?.pwr ?? existing.state,
       lastUpdated: this.now().toISOString(),
     };
     this.devices.set(message.deviceId, updated);
@@ -373,6 +376,7 @@ export class AuxHomeProvider implements AuxProvider {
   }
 
   private normalizeDevice(record: AuxHomeDeviceRecord): AuxDevice {
+    const params = this.numericParams(record.status);
     return {
       endpointId: record.did,
       friendlyName: record.alias || `AUX Home ${record.did.slice(-4)}`,
@@ -381,8 +385,10 @@ export class AuxHomeProvider implements AuxProvider {
       devicetypeFlag: 0,
       cookie: '',
       mac: record.mac?.toLowerCase(),
-      params: this.numericParams(record.status),
-      state: record.online ? 1 : 0,
+      params,
+      // AUX Home's `online` flag is availability, not the compressor's power state.
+      // Until MQTT provides an authoritative pwr value, default to safely reporting off.
+      state: params.pwr === 1 ? 1 : 0,
       lastUpdated: this.now().toISOString(),
     };
   }
