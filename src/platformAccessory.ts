@@ -29,6 +29,7 @@ import {
   AC_SWING_VERTICAL_ON,
   AC_TEMPERATURE_AMBIENT,
   AC_TEMPERATURE_TARGET,
+  AC_TURBO,
   AC_MODE_SPECIAL,
   AUX_ECOMODE,
   AUX_ECOMODE_OFF,
@@ -64,6 +65,7 @@ interface FanSpeedLevel {
   readonly aux: AuxFanSpeed;
   readonly percent: number;
   readonly comfortableWind: boolean;
+  readonly turbo?: boolean;
 }
 
 const FAN_SPEED_LEVELS: FanSpeedLevel[] = [
@@ -72,7 +74,7 @@ const FAN_SPEED_LEVELS: FanSpeedLevel[] = [
   { id: 'low', aux: AuxFanSpeed.LOW, percent: 40, comfortableWind: false },
   { id: 'medium', aux: AuxFanSpeed.MEDIUM, percent: 60, comfortableWind: false },
   { id: 'high', aux: AuxFanSpeed.HIGH, percent: 80, comfortableWind: false },
-  { id: 'turbo', aux: AuxFanSpeed.TURBO, percent: 100, comfortableWind: false },
+  { id: 'turbo', aux: AuxFanSpeed.HIGH, percent: 100, comfortableWind: false, turbo: true },
 ];
 const DEFAULT_MANUAL_FAN_SPEED = AuxFanSpeed.MEDIUM;
 
@@ -669,9 +671,11 @@ export class AuxCloudPlatformAccessory {
     const percent = clamp(Number(value), minPercent, 100);
     const level = this.getFanLevelFromPercent(percent);
     const comfortableWind = level.comfortableWind ? 1 : 0;
+    const turbo = level.turbo ? 1 : 0;
     const alreadySelected = this.device.params?.[AC_FAN_SPEED] === level.aux
       && (!this.supportsComfortableWind
-        || this.device.params?.[AC_COMFORTABLE_WIND] === comfortableWind);
+        || this.device.params?.[AC_COMFORTABLE_WIND] === comfortableWind)
+      && this.device.params?.[AC_TURBO] === turbo;
     if (alreadySelected) {
       return;
     }
@@ -680,6 +684,7 @@ export class AuxCloudPlatformAccessory {
     this.device.params = this.device.params ?? {};
     this.device.params[AC_FAN_SPEED] = level.aux;
     this.device.params[AC_COMFORTABLE_WIND] = comfortableWind;
+    this.device.params[AC_TURBO] = turbo;
     this.platform.updateCachedDevice(this.device);
     this.updateCharacteristicsFromDevice();
     if (this.fanAutoService) {
@@ -692,6 +697,7 @@ export class AuxCloudPlatformAccessory {
     }
 
     const payload: Record<string, number> = { [AC_FAN_SPEED]: level.aux };
+    payload[AC_TURBO] = turbo;
     if (this.supportsComfortableWind) {
       payload[AC_COMFORTABLE_WIND] = comfortableWind;
     }
@@ -718,6 +724,10 @@ export class AuxCloudPlatformAccessory {
 
     if (this.supportsComfortableWind && this.device.params[AC_COMFORTABLE_WIND] === 1) {
       return 0;
+    }
+
+    if (this.device.params[AC_TURBO] === 1) {
+      return FAN_SPEED_LEVELS.find((level) => level.turbo)?.percent ?? 100;
     }
 
     const raw = this.device.params[AC_FAN_SPEED];

@@ -59,6 +59,7 @@ export const AC_POWER_LIMIT_ON = { [AC_POWER_LIMIT]: 1 };
 
 export const AC_MODE_SPECIAL = 'mode';
 export const AC_FAN_SPEED = 'ac_mark';
+export const AC_TURBO = 'turbo';
 
 export const AC_MODE_COOLING = { [AUX_MODE]: 0 };
 export const AC_MODE_HEATING = { [AUX_MODE]: 1 };

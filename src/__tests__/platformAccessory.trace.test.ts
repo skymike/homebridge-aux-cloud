@@ -7,6 +7,7 @@ import { AuxCloudPlatformAccessory } from '../platformAccessory';
 type AccessoryPrivate = {
   handleActiveSet: (value: number) => Promise<void>;
   handleRotationSpeedSet: (value: number) => Promise<void>;
+  handleRotationSpeedGet: () => number;
   handleTargetStateSet: (value: number) => Promise<void>;
   updateCharacteristicsFromDevice: () => void;
   traceGet: (characteristic: string, value: number | boolean) => number | boolean;
@@ -278,11 +279,47 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
     expect(startDeviceCommand).not.toHaveBeenCalled();
     jest.advanceTimersByTime(300);
     expect(startDeviceCommand).toHaveBeenCalledTimes(1);
-    expect(startDeviceCommand).toHaveBeenCalledWith(device, { ac_mark: 5, comfwind: 0 });
+    expect(startDeviceCommand).toHaveBeenCalledWith(device, { ac_mark: 5, comfwind: 0, turbo: 0 });
 
     await handleRotationSpeedSet.call(instance, 20);
     jest.advanceTimersByTime(300);
     expect(startDeviceCommand).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
+  });
+
+  test('maps the highest fan slider level to the AUX turbo flag', async () => {
+    jest.useFakeTimers();
+    const device = makeDevice();
+    device.params = { pwr: 1, ac_mark: 2, turbo: 0 };
+    device.state = 1;
+    const startDeviceCommand = jest.fn();
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      device,
+      supportsFanSpeed: true,
+      supportsComfortableWind: false,
+      platform: {
+        updateCachedDevice: jest.fn(),
+        registerPendingCommandWithState: jest.fn(() => 1),
+        schedulePendingCommandCompletion: jest.fn(),
+        commandTimeoutMs: 5000,
+        commandRetryCount: 2,
+        startDeviceCommand,
+      },
+      updateCharacteristicsFromDevice: jest.fn(),
+      setFaulted: jest.fn(),
+    });
+
+    const accessory = AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate;
+    await accessory.handleRotationSpeedSet.call(instance, 100);
+    jest.advanceTimersByTime(300);
+
+    expect(startDeviceCommand).toHaveBeenCalledWith(device, { ac_mark: 3, turbo: 1 });
+    expect(accessory.handleRotationSpeedGet.call(instance)).toBe(100);
+
+    await accessory.handleRotationSpeedSet.call(instance, 80);
+    jest.advanceTimersByTime(300);
+    expect(startDeviceCommand).toHaveBeenLastCalledWith(device, { ac_mark: 3, turbo: 0 });
+    expect(accessory.handleRotationSpeedGet.call(instance)).toBe(80);
     jest.useRealTimers();
   });
 });
