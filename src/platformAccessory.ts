@@ -81,6 +81,9 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const MODE_RETRY_DELAY_MS = 1_200;
+const AUTO_FAN_SERVICE_SUBTYPE = 'fanAuto-v2';
+const DRY_MODE_SERVICE_SUBTYPE = 'dryMode-v2';
+const FAN_MODE_SERVICE_SUBTYPE = 'fanMode-v2';
 
 const celsiusToDisplay = (celsius: number, unit: 'C' | 'F'): number =>
   unit === 'F' ? roundToOneDecimal((celsius * 9) / 5 + 32) : roundToOneDecimal(celsius);
@@ -330,8 +333,7 @@ export class AuxCloudPlatformAccessory {
 
     const service =
       this.fanAutoService
-        ?? this.accessory.getServiceById(this.platform.Service.Switch, 'fanAuto')
-        ?? this.accessory.addService(this.platform.Service.Switch, 'Auto Fan', 'fanAuto');
+        ?? this.getOrCreateNamedSwitch('Auto Fan', AUTO_FAN_SERVICE_SUBTYPE, ['fanAuto']);
 
     this.setServiceDisplayName(service, 'Auto Fan');
     service.getCharacteristic(this.platform.Characteristic.On)
@@ -386,16 +388,20 @@ export class AuxCloudPlatformAccessory {
   }
 
   private configureModeSwitches(): void {
-    const definitions: Array<{ key: 'dry' | 'fan'; label: string; auxMode: AuxAcModeValue }> = [
-      { key: 'dry', label: 'Dry Mode', auxMode: AuxAcModeValue.DRY },
-      { key: 'fan', label: 'Fan Mode', auxMode: AuxAcModeValue.FAN },
+    const definitions: Array<{
+      key: 'dry' | 'fan';
+      label: string;
+      subtype: string;
+      auxMode: AuxAcModeValue;
+    }> = [
+      { key: 'dry', label: 'Dry Mode', subtype: DRY_MODE_SERVICE_SUBTYPE, auxMode: AuxAcModeValue.DRY },
+      { key: 'fan', label: 'Fan Mode', subtype: FAN_MODE_SERVICE_SUBTYPE, auxMode: AuxAcModeValue.FAN },
     ];
 
     for (const definition of definitions) {
       const existing =
         this.modeSwitchServices.get(definition.key)
-          ?? this.accessory.getServiceById(this.platform.Service.Switch, definition.key)
-          ?? this.accessory.addService(this.platform.Service.Switch, definition.label, definition.key);
+          ?? this.getOrCreateNamedSwitch(definition.label, definition.subtype, [definition.key]);
 
       this.setServiceDisplayName(existing, definition.label);
       existing.getCharacteristic(this.platform.Characteristic.On)
@@ -873,6 +879,29 @@ export class AuxCloudPlatformAccessory {
     // their Name characteristic. Apple Home uses displayName for tile labels.
     service.displayName = label;
     service.updateCharacteristic(this.platform.Characteristic.Name, label);
+  }
+
+  private getOrCreateNamedSwitch(
+    label: string,
+    subtype: string,
+    legacySubtypes: readonly string[],
+  ): Service {
+    const current = this.accessory.getServiceById(this.platform.Service.Switch, subtype);
+    if (current) {
+      this.setServiceDisplayName(current, label);
+      return current;
+    }
+
+    for (const legacySubtype of legacySubtypes) {
+      const legacy = this.accessory.getServiceById(this.platform.Service.Switch, legacySubtype);
+      if (legacy) {
+        this.accessory.removeService(legacy);
+      }
+    }
+
+    const service = this.accessory.addService(this.platform.Service.Switch, label, subtype);
+    this.setServiceDisplayName(service, label);
+    return service;
   }
 
   private consumePendingPowerOn(): AuxTraceContext | undefined {

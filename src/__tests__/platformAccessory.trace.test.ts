@@ -10,6 +10,7 @@ type AccessoryPrivate = {
   updateCharacteristicsFromDevice: () => void;
   traceGet: (characteristic: string, value: number | boolean) => number | boolean;
   setServiceDisplayName: (service: { displayName: string; updateCharacteristic: jest.Mock }, label: string) => void;
+  getOrCreateNamedSwitch: (label: string, subtype: string, legacySubtypes: readonly string[]) => unknown;
 };
 
 function makeDevice(): AuxDevice {
@@ -149,6 +150,28 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
 
     expect(service.displayName).toBe('Fan Mode');
     expect(service.updateCharacteristic).toHaveBeenCalledWith(nameCharacteristic, 'Fan Mode');
+  });
+
+  test('replaces a legacy switch identity so Apple Home imports the corrected label', () => {
+    const legacy = { displayName: 'Guest AC' };
+    const replacement = { displayName: 'Auto Fan', updateCharacteristic: jest.fn() };
+    const getServiceById = jest.fn((_type, subtype: string) => subtype === 'fanAuto' ? legacy : undefined);
+    const removeService = jest.fn();
+    const addService = jest.fn(() => replacement);
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      accessory: { getServiceById, removeService, addService },
+      platform: {
+        Service: { Switch: {} },
+        Characteristic: { Name: {} },
+      },
+    });
+
+    const service = (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .getOrCreateNamedSwitch.call(instance, 'Auto Fan', 'fanAuto-v2', ['fanAuto']);
+
+    expect(removeService).toHaveBeenCalledWith(legacy);
+    expect(addService).toHaveBeenCalledWith({}, 'Auto Fan', 'fanAuto-v2');
+    expect(service).toBe(replacement);
   });
 
   test('combines HomeKit power-on and cooling callbacks into one device command', async () => {
