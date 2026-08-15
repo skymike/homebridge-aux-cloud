@@ -9,6 +9,7 @@ type AccessoryPrivate = {
   handleTargetStateSet: (value: number) => Promise<void>;
   updateCharacteristicsFromDevice: () => void;
   traceGet: (characteristic: string, value: number | boolean) => number | boolean;
+  setServiceDisplayName: (service: { displayName: string; updateCharacteristic: jest.Mock }, label: string) => void;
 };
 
 function makeDevice(): AuxDevice {
@@ -134,6 +135,20 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
       characteristic: 'CurrentTemperature',
       value: 25,
     })]);
+  });
+
+  test('updates the cached service display name as well as its Name characteristic', () => {
+    const service = { displayName: 'Guest AC', updateCharacteristic: jest.fn() };
+    const nameCharacteristic = {};
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      platform: { Characteristic: { Name: nameCharacteristic } },
+    });
+
+    (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .setServiceDisplayName.call(instance, service, 'Fan Mode');
+
+    expect(service.displayName).toBe('Fan Mode');
+    expect(service.updateCharacteristic).toHaveBeenCalledWith(nameCharacteristic, 'Fan Mode');
   });
 
   test('combines HomeKit power-on and cooling callbacks into one device command', async () => {

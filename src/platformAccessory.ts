@@ -333,7 +333,7 @@ export class AuxCloudPlatformAccessory {
         ?? this.accessory.getServiceById(this.platform.Service.Switch, 'fanAuto')
         ?? this.accessory.addService(this.platform.Service.Switch, 'Auto Fan', 'fanAuto');
 
-    service.updateCharacteristic(this.platform.Characteristic.Name, 'Auto Fan');
+    this.setServiceDisplayName(service, 'Auto Fan');
     service.getCharacteristic(this.platform.Characteristic.On)
       .onSet(this.handleFanAutoSet.bind(this))
       .onGet(() => this.traceGet('AutoFan.On', this.handleFanAutoGet()));
@@ -370,7 +370,7 @@ export class AuxCloudPlatformAccessory {
           ?? this.accessory.getServiceById(this.platform.Service.Switch, feature)
           ?? this.accessory.addService(this.platform.Service.Switch, definition.label, feature);
 
-        service.updateCharacteristic(this.platform.Characteristic.Name, definition.label);
+        this.setServiceDisplayName(service, definition.label);
         service.getCharacteristic(this.platform.Characteristic.On)
           .onSet(async (value) => {
             await this.handleFeatureSwitchSet(feature, Boolean(value));
@@ -397,7 +397,7 @@ export class AuxCloudPlatformAccessory {
           ?? this.accessory.getServiceById(this.platform.Service.Switch, definition.key)
           ?? this.accessory.addService(this.platform.Service.Switch, definition.label, definition.key);
 
-      existing.updateCharacteristic(this.platform.Characteristic.Name, definition.label);
+      this.setServiceDisplayName(existing, definition.label);
       existing.getCharacteristic(this.platform.Characteristic.On)
         .onSet(async (value) => {
           await this.handleModeSwitchSet(definition.key, Boolean(value), definition.auxMode);
@@ -866,6 +866,13 @@ export class AuxCloudPlatformAccessory {
     });
     this.platform.trace.emit('hap.get', context);
     return value;
+  }
+
+  private setServiceDisplayName(service: Service, label: string): void {
+    // Cached HomeKit services retain Service.displayName independently from
+    // their Name characteristic. Apple Home uses displayName for tile labels.
+    service.displayName = label;
+    service.updateCharacteristic(this.platform.Characteristic.Name, label);
   }
 
   private consumePendingPowerOn(): AuxTraceContext | undefined {
