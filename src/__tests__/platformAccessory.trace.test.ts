@@ -6,6 +6,7 @@ import { AuxCloudPlatformAccessory } from '../platformAccessory';
 
 type AccessoryPrivate = {
   handleActiveSet: (value: number) => Promise<void>;
+  handleTargetStateSet: (value: number) => Promise<void>;
   updateCharacteristicsFromDevice: () => void;
   traceGet: (characteristic: string, value: number | boolean) => number | boolean;
 };
@@ -34,6 +35,7 @@ function makeTrace() {
 
 describe('AuxCloudPlatformAccessory command tracing', () => {
   test('carries one correlation from a HomeKit Active SET into command start', async () => {
+    jest.useFakeTimers();
     const { trace, records } = makeTrace();
     const device = makeDevice();
     const startDeviceCommand = jest.fn((
@@ -60,6 +62,8 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
 
     await (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
       .handleActiveSet.call(instance, 1);
+    expect(records.map(({ event }) => event)).toEqual(['hap.set']);
+    jest.runOnlyPendingTimers();
 
     expect(records.map(({ event }) => event)).toEqual(['hap.set', 'command.start']);
     expect(records[0]).toMatchObject({
@@ -72,6 +76,7 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
     expect(records[1].correlationId).toBe(records[0].correlationId);
     expect(records[1].device).toBe(records[0].device);
     expect(startDeviceCommand).toHaveBeenCalledTimes(1);
+    jest.useRealTimers();
   });
 
   test('labels cached state synchronization without dispatching a command', () => {
@@ -129,5 +134,42 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
       characteristic: 'CurrentTemperature',
       value: 25,
     })]);
+  });
+
+  test('combines HomeKit power-on and cooling callbacks into one device command', async () => {
+    jest.useFakeTimers();
+    const { trace } = makeTrace();
+    const device = makeDevice();
+    device.params = { pwr: 0, ac_mode: 4 };
+    device.state = 0;
+    const startDeviceCommand = jest.fn();
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      device,
+      platform: {
+        trace,
+        Characteristic: {
+          Active: { ACTIVE: 1, INACTIVE: 0 },
+          TargetHeaterCoolerState: { AUTO: 0, COOL: 2, HEAT: 1 },
+        },
+        commandTimeoutMs: 5000,
+        commandRetryCount: 2,
+        updateCachedDevice: jest.fn(),
+        registerPendingCommandWithState: jest.fn(() => 1),
+        schedulePendingCommandCompletion: jest.fn(),
+        startDeviceCommand,
+      },
+      updateCharacteristicsFromDevice: jest.fn(),
+      setFaulted: jest.fn(),
+    });
+
+    await (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .handleActiveSet.call(instance, 1);
+    await (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .handleTargetStateSet.call(instance, 2);
+
+    expect(startDeviceCommand).toHaveBeenCalledTimes(1);
+    expect(startDeviceCommand.mock.calls[0][1]).toEqual({ pwr: 1, ac_mode: 0 });
+    jest.runAllTimers();
+    jest.useRealTimers();
   });
 });

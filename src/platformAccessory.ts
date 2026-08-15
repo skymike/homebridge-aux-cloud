@@ -171,6 +171,10 @@ export class AuxCloudPlatformAccessory {
 
   private pendingTempScaled?: number;
 
+  private pendingPowerOnTimeout?: NodeJS.Timeout;
+
+  private pendingPowerOnContext?: AuxTraceContext;
+
   constructor(
     private readonly platform: AuxCloudPlatform,
     private readonly accessory: PlatformAccessory,
@@ -465,8 +469,24 @@ export class AuxCloudPlatformAccessory {
       isActive ? 1 : 0,
     );
 
-    // Disparar comando en background
-    this.platform.startDeviceCommand(this.device, payload, undefined, traceContext);
+    // Defer power-on by one event-loop turn so a paired HomeKit mode SET can
+    // merge both changes into one physical AUX transaction.
+    if (isActive) {
+      if (this.pendingPowerOnTimeout) {
+        clearTimeout(this.pendingPowerOnTimeout);
+      }
+      const device = this.device;
+      this.pendingPowerOnContext = traceContext;
+      this.pendingPowerOnTimeout = setTimeout(() => {
+        this.pendingPowerOnTimeout = undefined;
+        const pendingContext = this.pendingPowerOnContext;
+        this.pendingPowerOnContext = undefined;
+        this.platform.startDeviceCommand(device, payload, undefined, pendingContext);
+      }, 0);
+    } else {
+      this.consumePendingPowerOn();
+      this.platform.startDeviceCommand(this.device, payload, undefined, traceContext);
+    }
 
     // Liberar pending una vez el comando puede haber completado con retries
     if (seq !== null) {
@@ -490,6 +510,7 @@ export class AuxCloudPlatformAccessory {
       return;
     }
 
+    const pendingPowerOnContext = this.consumePendingPowerOn();
     const auxMode = this.mapTargetStateToAuxMode(Number(value));
     this.pendingAuxMode = auxMode;
 
@@ -528,7 +549,10 @@ export class AuxCloudPlatformAccessory {
     if (shouldSendSpecialModeParam) {
       payload[AC_MODE_SPECIAL] = auxMode;
     }
-    this.platform.startDeviceCommand(this.device, payload);
+    if (pendingPowerOnContext) {
+      payload[AC_POWER] = 1;
+    }
+    this.platform.startDeviceCommand(this.device, payload, undefined, pendingPowerOnContext);
     this.setPendingModeTimeout(auxMode, payload);
   }
 
@@ -842,6 +866,17 @@ export class AuxCloudPlatformAccessory {
     });
     this.platform.trace.emit('hap.get', context);
     return value;
+  }
+
+  private consumePendingPowerOn(): AuxTraceContext | undefined {
+    if (!this.pendingPowerOnTimeout) {
+      return undefined;
+    }
+    clearTimeout(this.pendingPowerOnTimeout);
+    this.pendingPowerOnTimeout = undefined;
+    const context = this.pendingPowerOnContext;
+    this.pendingPowerOnContext = undefined;
+    return context;
   }
 
   private getFanLevels(): FanSpeedLevel[] {
