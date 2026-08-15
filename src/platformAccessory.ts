@@ -174,6 +174,10 @@ export class AuxCloudPlatformAccessory {
 
   private pendingTempScaled?: number;
 
+  private pendingFanTimeout?: NodeJS.Timeout;
+
+  private pendingFanPayload?: Record<string, number>;
+
   private pendingPowerOnTimeout?: NodeJS.Timeout;
 
   private pendingPowerOnContext?: AuxTraceContext;
@@ -461,6 +465,10 @@ export class AuxCloudPlatformAccessory {
     });
     this.platform.trace.emit('hap.set', traceContext);
 
+    if (Number(value) === oldValue) {
+      return;
+    }
+
     // Aplicar estado optimista inmediatamente
     this.device.params = this.device.params ?? {};
     this.device.state = isActive ? 1 : 0;
@@ -680,8 +688,20 @@ export class AuxCloudPlatformAccessory {
     if (this.supportsComfortableWind) {
       payload[AC_COMFORTABLE_WIND] = level.comfortableWind ? 1 : 0;
     }
-    this.setupPendingGuard();
-    this.platform.startDeviceCommand(this.device, payload);
+    this.pendingFanPayload = payload;
+    if (this.pendingFanTimeout) {
+      clearTimeout(this.pendingFanTimeout);
+    }
+    const device = this.device;
+    this.pendingFanTimeout = setTimeout(() => {
+      this.pendingFanTimeout = undefined;
+      const finalPayload = this.pendingFanPayload;
+      this.pendingFanPayload = undefined;
+      if (finalPayload) {
+        this.setupPendingGuard();
+        this.platform.startDeviceCommand(device, finalPayload);
+      }
+    }, 300);
   }
 
   private handleRotationSpeedGet(): CharacteristicValue {

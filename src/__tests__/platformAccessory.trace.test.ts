@@ -6,6 +6,7 @@ import { AuxCloudPlatformAccessory } from '../platformAccessory';
 
 type AccessoryPrivate = {
   handleActiveSet: (value: number) => Promise<void>;
+  handleRotationSpeedSet: (value: number) => Promise<void>;
   handleTargetStateSet: (value: number) => Promise<void>;
   updateCharacteristicsFromDevice: () => void;
   traceGet: (characteristic: string, value: number | boolean) => number | boolean;
@@ -212,6 +213,72 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
     expect(startDeviceCommand).toHaveBeenCalledTimes(1);
     expect(startDeviceCommand.mock.calls[0][1]).toEqual({ pwr: 1, ac_mode: 0 });
     jest.runAllTimers();
+    jest.useRealTimers();
+  });
+
+  test('ignores a redundant Active SET while the air conditioner is already on', async () => {
+    jest.useFakeTimers();
+    const { trace } = makeTrace();
+    const device = makeDevice();
+    device.params.pwr = 1;
+    device.state = 1;
+    const startDeviceCommand = jest.fn();
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      device,
+      platform: {
+        trace,
+        Characteristic: { Active: { ACTIVE: 1, INACTIVE: 0 } },
+        commandTimeoutMs: 5000,
+        commandRetryCount: 2,
+        updateCachedDevice: jest.fn(),
+        registerPendingCommandWithState: jest.fn(() => 1),
+        schedulePendingCommandCompletion: jest.fn(),
+        startDeviceCommand,
+      },
+      updateCharacteristicsFromDevice: jest.fn(),
+      setFaulted: jest.fn(),
+    });
+
+    await (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .handleActiveSet.call(instance, 1);
+    jest.runAllTimers();
+
+    expect(startDeviceCommand).not.toHaveBeenCalled();
+    jest.useRealTimers();
+  });
+
+  test('coalesces a burst of identical HomeKit fan-speed updates into one command', async () => {
+    jest.useFakeTimers();
+    const device = makeDevice();
+    device.params = { pwr: 1, ac_mark: 2, comfwind: 0 };
+    device.state = 1;
+    const startDeviceCommand = jest.fn();
+    const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
+      device,
+      supportsFanSpeed: true,
+      supportsComfortableWind: true,
+      platform: {
+        updateCachedDevice: jest.fn(),
+        registerPendingCommandWithState: jest.fn(() => 1),
+        schedulePendingCommandCompletion: jest.fn(),
+        commandTimeoutMs: 5000,
+        commandRetryCount: 2,
+        startDeviceCommand,
+      },
+      updateCharacteristicsFromDevice: jest.fn(),
+      setFaulted: jest.fn(),
+    });
+
+    const handleRotationSpeedSet = (AuxCloudPlatformAccessory.prototype as unknown as AccessoryPrivate)
+      .handleRotationSpeedSet;
+    await handleRotationSpeedSet.call(instance, 20);
+    await handleRotationSpeedSet.call(instance, 20);
+    await handleRotationSpeedSet.call(instance, 20);
+
+    expect(startDeviceCommand).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(300);
+    expect(startDeviceCommand).toHaveBeenCalledTimes(1);
+    expect(startDeviceCommand).toHaveBeenCalledWith(device, { ac_mark: 5, comfwind: 0 });
     jest.useRealTimers();
   });
 });
