@@ -901,6 +901,7 @@ export class AuxCloudPlatformAccessory {
 
     const service = this.accessory.addService(this.platform.Service.Switch, label, subtype);
     this.setServiceDisplayName(service, label);
+    this.platform.api.updatePlatformAccessories([this.accessory]);
     return service;
   }
 

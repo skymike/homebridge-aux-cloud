@@ -158,9 +158,12 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
     const getServiceById = jest.fn((_type, subtype: string) => subtype === 'fanAuto' ? legacy : undefined);
     const removeService = jest.fn();
     const addService = jest.fn(() => replacement);
+    const accessory = { getServiceById, removeService, addService };
+    const updatePlatformAccessories = jest.fn();
     const instance = Object.assign(Object.create(AuxCloudPlatformAccessory.prototype), {
-      accessory: { getServiceById, removeService, addService },
+      accessory,
       platform: {
+        api: { updatePlatformAccessories },
         Service: { Switch: {} },
         Characteristic: { Name: {} },
       },
@@ -171,6 +174,7 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
 
     expect(removeService).toHaveBeenCalledWith(legacy);
     expect(addService).toHaveBeenCalledWith({}, 'Auto Fan', 'fanAuto-v2');
+    expect(updatePlatformAccessories).toHaveBeenCalledWith([accessory]);
     expect(service).toBe(replacement);
   });
 
