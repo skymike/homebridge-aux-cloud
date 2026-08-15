@@ -214,6 +214,17 @@ describe('AuxHomeProvider', () => {
     expect(await provider.refreshDeviceParams(device)).toMatchObject({ pwr: 1, temp: 250, ac_mode: 0 });
   });
 
+  test('confirms a command without retrying when an unreported comfortable-wind field is included', async () => {
+    const { mqtt, provider } = setup();
+    const [device] = await discover(provider, mqtt);
+
+    const command = provider.setDeviceParams(device, { ac_mark: 0, comfwind: 0 });
+    mqtt.emit(POWER_ON_25C);
+
+    await expect(command).resolves.toBeUndefined();
+    expect(mqtt.publish).toHaveBeenCalledTimes(1);
+  });
+
   test('traces MQTT publication and confirmation with the originating correlation', async () => {
     const records: Array<Record<string, unknown>> = [];
     const logger = {

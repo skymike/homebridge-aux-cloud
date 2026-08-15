@@ -21,6 +21,10 @@ import {
 import type { AuxTrace, AuxTraceContext } from '../trace/AuxTrace';
 
 const AUX_LINK_STATE_QUERY = Buffer.from('bb0006800000020011012b7e', 'hex');
+const AUX_LINK_CONFIRMABLE_PARAMS = new Set([
+  'pwr', 'temp', 'ac_mode', 'ac_mark', 'ac_vdir', 'ac_hdir', 'turbo',
+  'ac_slp', 'ac_health', 'ac_clean', 'ecomode', 'scrdisp', 'mldprf',
+]);
 
 interface AuxHomeRestApi {
   login(account: string, password: string): Promise<AuxHomeSession>;
@@ -177,6 +181,9 @@ export class AuxHomeProvider implements AuxProvider {
 
     const confirmed = this.devices.get(device.endpointId)?.params ?? device.params ?? {};
     const changes = this.numericParams(values);
+    const expected = Object.fromEntries(
+      Object.entries(changes).filter(([key]) => AUX_LINK_CONFIRMABLE_PARAMS.has(key)),
+    );
     const payload = buildAuxLinkCommandPayload({ ...confirmed, ...changes });
 
     this.rejectPending(device.endpointId, new AuxProviderCommandSupersededError());
@@ -188,7 +195,7 @@ export class AuxHomeProvider implements AuxProvider {
         }
         reject(new Error('AUX Home command confirmation timed out'));
       }, this.commandTimeoutMs);
-      this.pendingCommands.set(device.endpointId, { expected: changes, resolve, reject, timer, traceContext });
+      this.pendingCommands.set(device.endpointId, { expected, resolve, reject, timer, traceContext });
 
       try {
         if (traceContext) {
