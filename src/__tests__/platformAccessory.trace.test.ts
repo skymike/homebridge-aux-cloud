@@ -26,7 +26,8 @@ function makeDevice(): AuxDevice {
 function makeTrace() {
   const records: Array<Record<string, unknown>> = [];
   const logger = {
-    debug: (_format: string, record: string) => records.push(JSON.parse(record)),
+    debug: jest.fn(),
+    info: (_format: string, record: string) => records.push(JSON.parse(record)),
   } as unknown as Logger;
   return { trace: new AuxTrace(logger, true), records };
 }

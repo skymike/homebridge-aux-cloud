@@ -46,7 +46,7 @@ export class AuxTrace {
   private sequence = 0;
 
   constructor(
-    private readonly logger: Pick<Logger, 'debug'>,
+    private readonly logger: Pick<Logger, 'info'>,
     private readonly enabled: boolean,
   ) {}
 
@@ -85,6 +85,6 @@ export class AuxTrace {
       ...context.details,
       ...details,
     });
-    this.logger.debug('[AUX TRACE] %s', JSON.stringify(record));
+    this.logger.info('[AUX TRACE] %s', JSON.stringify(record));
   }
 }

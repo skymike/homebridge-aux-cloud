@@ -200,7 +200,8 @@ describe('AuxHomeProvider', () => {
   test('traces MQTT publication and confirmation with the originating correlation', async () => {
     const records: Array<Record<string, unknown>> = [];
     const logger = {
-      debug: (_format: string, record: string) => records.push(JSON.parse(record)),
+      debug: jest.fn(),
+      info: (_format: string, record: string) => records.push(JSON.parse(record)),
     } as unknown as Logger;
     const trace = new AuxTrace(logger, true);
     const { mqtt, provider } = setup(1_000, trace);

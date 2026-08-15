@@ -20,7 +20,8 @@ function makeDevice(endpointId: string): AuxDevice {
 function makeLogger(): { logger: Logger; records: string[] } {
   const records: string[] = [];
   const logger = {
-    debug: (_format: string, record: string) => records.push(record),
+    debug: jest.fn(),
+    info: (_format: string, record: string) => records.push(record),
   } as unknown as Logger;
   return { logger, records };
 }
