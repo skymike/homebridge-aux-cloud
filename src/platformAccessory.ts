@@ -668,11 +668,18 @@ export class AuxCloudPlatformAccessory {
     const minPercent = levels[0].percent;
     const percent = clamp(Number(value), minPercent, 100);
     const level = this.getFanLevelFromPercent(percent);
+    const comfortableWind = level.comfortableWind ? 1 : 0;
+    const alreadySelected = this.device.params?.[AC_FAN_SPEED] === level.aux
+      && (!this.supportsComfortableWind
+        || this.device.params?.[AC_COMFORTABLE_WIND] === comfortableWind);
+    if (alreadySelected) {
+      return;
+    }
 
     // Aplicar estado optimista inmediatamente
     this.device.params = this.device.params ?? {};
     this.device.params[AC_FAN_SPEED] = level.aux;
-    this.device.params[AC_COMFORTABLE_WIND] = level.comfortableWind ? 1 : 0;
+    this.device.params[AC_COMFORTABLE_WIND] = comfortableWind;
     this.platform.updateCachedDevice(this.device);
     this.updateCharacteristicsFromDevice();
     if (this.fanAutoService) {
@@ -686,7 +693,7 @@ export class AuxCloudPlatformAccessory {
 
     const payload: Record<string, number> = { [AC_FAN_SPEED]: level.aux };
     if (this.supportsComfortableWind) {
-      payload[AC_COMFORTABLE_WIND] = level.comfortableWind ? 1 : 0;
+      payload[AC_COMFORTABLE_WIND] = comfortableWind;
     }
     this.pendingFanPayload = payload;
     if (this.pendingFanTimeout) {

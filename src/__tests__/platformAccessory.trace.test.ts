@@ -279,6 +279,10 @@ describe('AuxCloudPlatformAccessory command tracing', () => {
     jest.advanceTimersByTime(300);
     expect(startDeviceCommand).toHaveBeenCalledTimes(1);
     expect(startDeviceCommand).toHaveBeenCalledWith(device, { ac_mark: 5, comfwind: 0 });
+
+    await handleRotationSpeedSet.call(instance, 20);
+    jest.advanceTimersByTime(300);
+    expect(startDeviceCommand).toHaveBeenCalledTimes(1);
     jest.useRealTimers();
   });
 });
