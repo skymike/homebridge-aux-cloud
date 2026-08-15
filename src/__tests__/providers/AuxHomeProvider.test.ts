@@ -3,6 +3,8 @@ import type { AuxHomeDeviceRecord, AuxHomeSession } from '../../api/auxhome/AuxH
 import { AuxHomeRestError } from '../../api/auxhome/AuxHomeRestClient';
 import { AuxHomeProvider } from '../../api/providers/AuxHomeProvider';
 import { createProvider } from '../../api/providers/createProvider';
+import type { Logger } from 'homebridge';
+import { AuxTrace } from '../../api/trace/AuxTrace';
 
 const DEVICE_ID = 'synthetic-device-0001';
 const STATE_QUERY = Buffer.from('bb0006800000020011012b7e', 'hex');
@@ -81,7 +83,7 @@ function deviceRecord(overrides: Partial<AuxHomeDeviceRecord> = {}): AuxHomeDevi
   };
 }
 
-function setup(commandTimeoutMs = 1_000) {
+function setup(commandTimeoutMs = 1_000, trace?: AuxTrace) {
   const restClient = new FakeRestClient();
   const mqtt = new FakeMqttSession();
   restClient.login.mockResolvedValue({ uid: 'synthetic-user', token: 'synthetic-session' });
@@ -91,6 +93,7 @@ function setup(commandTimeoutMs = 1_000) {
     mqttSessionFactory: () => mqtt,
     commandTimeoutMs,
     now: () => new Date('2026-08-13T10:00:00.000Z'),
+    trace,
   });
   return { mqtt, provider, restClient };
 }
@@ -192,6 +195,28 @@ describe('AuxHomeProvider', () => {
     mqtt.emit(POWER_ON_25C);
     await expect(command).resolves.toBeUndefined();
     expect(await provider.refreshDeviceParams(device)).toMatchObject({ pwr: 1, temp: 250, ac_mode: 0 });
+  });
+
+  test('traces MQTT publication and confirmation with the originating correlation', async () => {
+    const records: Array<Record<string, unknown>> = [];
+    const logger = {
+      debug: (_format: string, record: string) => records.push(JSON.parse(record)),
+    } as unknown as Logger;
+    const trace = new AuxTrace(logger, true);
+    const { mqtt, provider } = setup(1_000, trace);
+    const [device] = await discover(provider, mqtt);
+    const context = trace.createContext('hap.set', device);
+
+    const command = provider.setDeviceParams(device, { pwr: 1, temp: 250 }, context);
+    mqtt.emit(POWER_ON_25C);
+    await command;
+
+    expect(records.map(({ event }) => event)).toEqual(['mqtt.publish', 'mqtt.confirmed', 'state.push']);
+    expect(records[0].correlationId).toBe(context.correlationId);
+    expect(records[1].correlationId).toBe(context.correlationId);
+    expect(records[2]).toMatchObject({ event: 'state.push', source: 'provider.push' });
+    expect(records[2].correlationId).not.toBe(context.correlationId);
+    expect(JSON.stringify(records)).not.toContain(DEVICE_ID);
   });
 
   test('accepts a sequence-zero state frame and emits one normalized listener update', async () => {

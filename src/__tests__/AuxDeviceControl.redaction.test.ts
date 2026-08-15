@@ -4,6 +4,7 @@ import type { AuxDevice } from '../api/AuxCloudClient';
 import { AuxDeviceControl } from '../api/AuxDeviceControl';
 import type { AuxProviderKind } from '../api/providers/AuxProvider';
 import { AuxProviderCommandSupersededError } from '../api/providers/AuxProvider';
+import { AuxTrace } from '../api/trace/AuxTrace';
 
 const ENDPOINT_ID = 'dev2app/topic-derived-device/state';
 const LAN_IP = '192.0.2.77';
@@ -61,6 +62,25 @@ function allLogs(logger: Logger): string {
 }
 
 describe('AuxDeviceControl provider-specific identifier redaction', () => {
+  test('passes the command trace context to the cloud provider unchanged', async () => {
+    const logger = makeLogger();
+    const setDeviceParams = jest.fn().mockResolvedValue(undefined);
+    const trace = new AuxTrace(logger, true);
+    const device = makeDevice();
+    const context = trace.createContext('hap.set', device);
+    const control = new AuxDeviceControl({
+      cloudProvider: { kind: 'aux-home', setDeviceParams },
+    });
+
+    await control.sendCommand(device, { pwr: 0 }, {
+      globalStrategy: 'cloud-only',
+      cloudRetryCount: 0,
+      traceContext: context,
+    });
+
+    expect(setDeviceParams).toHaveBeenCalledWith(device, { pwr: 0 }, context);
+  });
+
   test('suppresses AUX Home LAN IP/MAC logging and redacts local errors', async () => {
     const logger = makeLogger();
     const control = makeControl('aux-home', logger);

@@ -123,6 +123,19 @@ MQTT is the primary source of live state. Changes from the physical remote are p
 - For a login or connectivity problem, record only the time, the provider error class/message, and the installed plugin version. Never attach raw configuration files, login responses, account/session values, device IDs, or MQTT diagnostics containing identifiers.
 - If physical-remote changes do not appear promptly, note whether Homebridge later catches up on its periodic refresh; this helps distinguish a live-update connection issue from device-state discovery without exposing private data.
 
+For command-count or cross-device investigations, temporarily enable the redacted trace:
+
+```jsonc
+{
+  "provider": "aux-home",
+  "traceCommands": true
+}
+```
+
+Trace records use the `[AUX TRACE]` prefix. `correlationId` links one HomeKit action to routing, publish, and confirmation records; `device` is a stable pseudonymous alias such as `device-1a2b3c4d5e`, not an AUX identifier. Passwords, tokens, account identifiers, endpoint IDs, MAC addresses, IP addresses, and MQTT topics are excluded. Disable `traceCommands` after diagnosis.
+
+Test one action at a time: choose one AC, perform one Home action, wait for `mqtt.confirmed`, and then compare the AUX Home app state and physical beep. A `hap.get` record is a read only; `hap.sync` is state synchronization and does not send a command. Count `mqtt.publish` records with the same correlation and verify that every record uses only the intended device alias.
+
 ---
 
 ### Mode 3 — Cloud + LAN (local-first with cloud fallback)
@@ -181,6 +194,7 @@ Use this mode to get the responsiveness of local control while retaining cloud a
 | `requestTimeoutMs` | integer (1000–30000) | `5000` | REST request timeout in ms, independent from command confirmation |
 | `includeDeviceIds` | string[] | `[]` | Only expose these cloud endpoint IDs (empty = all) |
 | `excludeDeviceIds` | string[] | `[]` | Hide these cloud endpoint IDs |
+| `traceCommands` | boolean | `false` | Emit redacted structured command-flow diagnostics with the `[AUX TRACE]` prefix |
 | `devices` | array | `[]` | LAN device list (see below) |
 
 > **`commandRetryCount` and `commandTimeoutMs`** apply only to cloud commands. They also determine the *pending guard* duration — the window during which HomeKit poll results are ignored to protect the optimistic UI state after a command. Formula: `commandTimeoutMs × (commandRetryCount + 1) + 3000 ms`. With defaults this is 18 s. Reduce `commandTimeoutMs` or `commandRetryCount` if HomeKit takes too long to reflect command failures.

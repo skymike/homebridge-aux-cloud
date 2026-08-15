@@ -10,6 +10,7 @@ import type {
 
 import { AuxApiError, type AuxDevice } from './api/AuxCloudClient';
 import { AuxDeviceControl } from './api/AuxDeviceControl';
+import { AuxTrace, type AuxTraceContext } from './api/trace/AuxTrace';
 import { createProvider } from './api/providers/createProvider';
 import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
@@ -45,6 +46,7 @@ export interface AuxCloudPlatformConfig extends PlatformConfig {
   pollInterval?: number;
   includeDeviceIds?: string[];
   excludeDeviceIds?: string[];
+  traceCommands?: boolean;
 
    // Optimistic UI settings
   commandRetryCount?: number;
@@ -99,6 +101,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
   public readonly commandTimeoutMs: number;
   public readonly redactDeviceIdentifiers: boolean;
   public readonly enableHomeKit: boolean;
+  public readonly trace: AuxTrace;
 
   private readonly handlers = new Map<string, AuxCloudPlatformAccessory>();
 
@@ -134,6 +137,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
     dependencies: AuxCloudPlatformDependencies = {},
    ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
+    this.trace = new AuxTrace(this.log, this.config.traceCommands === true);
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
     if (!this.credentialsConfigured) {
       this.log.info('AUX Cloud plugin is installed but not configured; skipping initialization until credentials are provided.');
@@ -176,6 +180,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
       region: this.config.region ?? 'eu',
       logger: this.log,
       requestTimeoutMs: this.commandTimeoutMs,
+      trace: this.trace,
      });
     this.redactDeviceIdentifiers = this.provider.kind === 'aux-home';
 
@@ -188,6 +193,7 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
         localControlEnabled: this.config.localControlEnabled,
         devices: this.config.devices,
         cloudProvider: this.provider,
+        trace: this.trace,
       });
 
     this.log.debug(
@@ -271,20 +277,24 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
        * Envía params al dispositivo con local/cloud selection y retry.
        * Delega a AuxDeviceControl para selección automática.
        */
-      public async sendDeviceParamsWithRetry(
+  public async sendDeviceParamsWithRetry(
         device: AuxDevice,
         params: Record<string, number>,
         retryCount: number = this.commandRetryCount,
+        traceContext?: AuxTraceContext,
         ): Promise<void> {
+        const effectiveTraceContext = traceContext ?? this.trace.createContext('direct.command', device);
          // Ensure cloud session is valid before sending command
         if (this.credentialsConfigured) {
           await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
          }
         try {
+          this.trace.emit('command.dispatch', effectiveTraceContext, { retryCount, values: params });
           await this.deviceControl.sendCommand(device, params, {
             globalStrategy: this.config.controlStrategy,
             localRetryCount: retryCount,
             cloudRetryCount: retryCount,
+            traceContext: effectiveTraceContext,
              });
            } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -305,10 +315,13 @@ export class AuxCloudPlatform implements DynamicPlatformPlugin {
     device: AuxDevice,
     params: Record<string, number>,
     retryCount: number = this.commandRetryCount,
+    traceContext?: AuxTraceContext,
    ): void {
+    const effectiveTraceContext = traceContext ?? this.trace.createContext('accessory.command', device);
+    this.trace.emit('command.start', effectiveTraceContext, { retryCount, values: params });
     void (async () => {
       try {
-        await this.sendDeviceParamsWithRetry(device, params, retryCount);
+        await this.sendDeviceParamsWithRetry(device, params, retryCount, effectiveTraceContext);
        } catch {
            // Command failed — schedule quick refresh to sync HomeKit state
         this.requestRefresh(500);

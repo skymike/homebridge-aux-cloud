@@ -10,6 +10,7 @@ import type {
 
 import { AuxApiError, type AuxDevice } from './api/AuxCloudClient';
 import { AuxDeviceControl } from './api/AuxDeviceControl';
+import { AuxTrace, type AuxTraceContext } from './api/trace/AuxTrace';
 import { createProvider } from './api/providers/createProvider';
 import type { AuxProvider } from './api/providers/AuxProvider';
 import { AuxCloudPlatformAccessory } from './platformAccessory';
@@ -57,6 +58,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
   public readonly commandTimeoutMs: number;
   public readonly redactDeviceIdentifiers: boolean;
   public readonly enableHomeKit: boolean;
+  public readonly trace: AuxTrace;
 
   private readonly handlers = new Map<string, AuxCloudPlatformAccessory>();
 
@@ -88,6 +90,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     dependencies: AuxCloudPlatformDependencies = {},
   ) {
     this.config = (config ?? {}) as AuxCloudPlatformConfig;
+    this.trace = new AuxTrace(this.log, this.config.traceCommands === true);
     this.credentialsConfigured = Boolean(this.config.username && this.config.password);
     if (!this.credentialsConfigured) {
       this.log.info('AUX Cloud plugin is installed but not configured; skipping initialization until credentials are provided.');
@@ -132,6 +135,7 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       logger: this.log,
       requestTimeoutMs: this.config.requestTimeoutMs ?? 5000,
       commandTimeoutMs: this.commandTimeoutMs,
+      trace: this.trace,
     });
     this.redactDeviceIdentifiers = this.provider.kind === 'aux-home';
 
@@ -143,7 +147,8 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
       commandRetryCount: this.commandRetryCount,
       localControlEnabled: this.config.localControlEnabled,
       devices: this.config.devices,
-        cloudProvider: this.provider,
+      cloudProvider: this.provider,
+      trace: this.trace,
     });
 
     this.log.debug(
@@ -276,16 +281,20 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     device: AuxDevice,
     params: Record<string, number>,
     retryCount: number = this.commandRetryCount,
+    traceContext?: AuxTraceContext,
   ): Promise<void> {
+    const effectiveTraceContext = traceContext ?? this.trace.createContext('direct.command', device);
     // Ensure cloud session is valid before sending command
     if (this.credentialsConfigured) {
           await this.provider.ensureLoggedIn(this.config.username!, this.config.password!);
     }
     try {
-      await this.deviceControl.sendCommand(device, params, {
+      this.trace.emit('command.dispatch', effectiveTraceContext, { retryCount, values: params });
+        await this.deviceControl.sendCommand(device, params, {
         globalStrategy: this.config.controlStrategy,
         localRetryCount: retryCount,
-        cloudRetryCount: retryCount,
+          cloudRetryCount: retryCount,
+        traceContext: effectiveTraceContext,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -305,10 +314,13 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
     device: AuxDevice,
     params: Record<string, number>,
     retryCount: number = this.commandRetryCount,
+    traceContext?: AuxTraceContext,
   ): void {
+    const effectiveTraceContext = traceContext ?? this.trace.createContext('accessory.command', device);
+    this.trace.emit('command.start', effectiveTraceContext, { retryCount, values: params });
     void (async () => {
       try {
-        await this.sendDeviceParamsWithRetry(device, params, retryCount);
+        await this.sendDeviceParamsWithRetry(device, params, retryCount, effectiveTraceContext);
       } catch {
         // Command failed — schedule quick refresh to sync HomeKit state
         this.requestRefresh(500);

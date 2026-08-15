@@ -4,6 +4,7 @@ import { AuxCloudHAPPlatform } from './Platform.HAP';
 import { AuxCloudMatterPlatform } from './Platform.Matter';
 import { createProvider } from './api/providers/createProvider';
 import type { AuxProvider } from './api/providers/AuxProvider';
+import { AuxTrace } from './api/trace/AuxTrace';
 import type { AuxCloudPlatformConfig, AuxCloudPlatformDependencies } from './types';
 
 interface InitializablePlatform extends DynamicPlatformPlugin {
@@ -64,6 +65,7 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
           logger: this.log,
           requestTimeoutMs: cfg.requestTimeoutMs ?? 5000,
           commandTimeoutMs: cfg.commandTimeoutMs,
+          trace: new AuxTrace(this.log, cfg.traceCommands === true),
         });
         childDependencies = {
           providerFactory: () => this.sharedProvider!,

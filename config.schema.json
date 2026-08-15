@@ -105,6 +105,12 @@
                     "type": "string"
                 }
             },
+            "traceCommands": {
+                "title": "Enable Redacted Command Trace",
+                "type": "boolean",
+                "default": false,
+                "description": "Emit structured [AUX TRACE] diagnostics for HomeKit reads, writes, command routing, and confirmations. Device identifiers and reusable credentials are redacted. Enable only while diagnosing control behavior."
+            },
             "commandRetryCount": {
                 "title": "Cloud Retry Attempts",
                 "type": "integer",

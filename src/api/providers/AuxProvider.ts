@@ -1,4 +1,5 @@
 import type { AuxDevice } from '../AuxCloudClient';
+import type { AuxTraceContext } from '../trace/AuxTrace';
 
 export type AuxProviderKind = 'ac-freedom' | 'aux-home';
 
@@ -20,7 +21,7 @@ export interface AuxProvider {
   readonly kind: AuxProviderKind;
   ensureLoggedIn(identifier: string, password: string): Promise<void>;
   listDevices(options?: DeviceQueryOptions): Promise<AuxDevice[]>;
-  setDeviceParams(device: AuxDevice, values: Record<string, number>): Promise<void>;
+  setDeviceParams(device: AuxDevice, values: Record<string, number>, traceContext?: AuxTraceContext): Promise<void>;
   refreshDeviceParams(device: AuxDevice): Promise<Record<string, number>>;
   invalidateSession(): void;
   onStateChange(listener: AuxProviderStateListener): () => void;

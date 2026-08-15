@@ -3,6 +3,7 @@ import type { API, Logger, PlatformConfig } from 'homebridge';
 import type { AuxDevice } from './api/AuxCloudClient';
 import type { AuxProvider, AuxProviderKind } from './api/providers/AuxProvider';
 import type { CreateProviderOptions } from './api/providers/createProvider';
+import type { AuxTrace, AuxTraceContext } from './api/trace/AuxTrace';
 
 export type FeatureSwitchKey =
   | 'screenDisplay'
@@ -37,6 +38,7 @@ export interface AuxCloudPlatformConfig extends PlatformConfig {
   pollInterval?: number;
   includeDeviceIds?: string[];
   excludeDeviceIds?: string[];
+  traceCommands?: boolean;
 
   // Optimistic UI settings
   commandRetryCount?: number;
@@ -70,10 +72,16 @@ export interface IAuxCloudPlatform {
   readonly commandTimeoutMs: number;
   readonly commandRetryCount: number;
   readonly redactDeviceIdentifiers: boolean;
+  readonly trace: AuxTrace;
   registerPendingCommand(endpointId: string): number | null;
   completePendingCommand(endpointId: string): void;
   schedulePendingCommandCompletion(endpointId: string, delayMs: number): void;
   isStaleState(endpointId: string): boolean;
-  startDeviceCommand(device: AuxDevice, params: Record<string, number>, retryCount?: number): void;
+  startDeviceCommand(
+    device: AuxDevice,
+    params: Record<string, number>,
+    retryCount?: number,
+    traceContext?: AuxTraceContext,
+  ): void;
   getDevice(endpointId: string): AuxDevice | undefined;
 }

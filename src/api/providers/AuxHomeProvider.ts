@@ -18,6 +18,7 @@ import {
   type AuxProviderStateListener,
   type DeviceQueryOptions,
 } from './AuxProvider';
+import type { AuxTrace, AuxTraceContext } from '../trace/AuxTrace';
 
 const AUX_LINK_STATE_QUERY = Buffer.from('bb0006800000020011012b7e', 'hex');
 
@@ -42,6 +43,7 @@ interface PendingCommand {
   resolve: () => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  traceContext?: AuxTraceContext;
 }
 
 export interface AuxHomeProviderOptions {
@@ -52,6 +54,7 @@ export interface AuxHomeProviderOptions {
   restClient?: AuxHomeRestApi;
   mqttSessionFactory?: (session: AuxHomeSession) => AuxHomeMqttConnection;
   now?: () => Date;
+  trace?: AuxTrace;
 }
 
 export class AuxHomeProvider implements AuxProvider {
@@ -64,6 +67,7 @@ export class AuxHomeProvider implements AuxProvider {
   private readonly commandTimeoutMs: number;
 
   private readonly now: () => Date;
+  private readonly trace?: AuxTrace;
 
   private session?: AuxHomeSession;
 
@@ -94,6 +98,7 @@ export class AuxHomeProvider implements AuxProvider {
     this.mqttSessionFactory = options.mqttSessionFactory ?? ((session) => new AuxHomeMqttSession(session));
     this.commandTimeoutMs = options.commandTimeoutMs ?? 5_000;
     this.now = options.now ?? (() => new Date());
+    this.trace = options.trace;
   }
 
   public async ensureLoggedIn(identifier: string, password: string): Promise<void> {
@@ -157,7 +162,11 @@ export class AuxHomeProvider implements AuxProvider {
     return devices;
   }
 
-  public async setDeviceParams(device: AuxDevice, values: Record<string, number>): Promise<void> {
+  public async setDeviceParams(
+    device: AuxDevice,
+    values: Record<string, number>,
+    traceContext?: AuxTraceContext,
+  ): Promise<void> {
     if (this.authenticationOperation) {
       await this.authenticationOperation;
     }
@@ -174,11 +183,17 @@ export class AuxHomeProvider implements AuxProvider {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(device.endpointId);
+        if (traceContext) {
+          this.trace?.emit('mqtt.timeout', traceContext);
+        }
         reject(new Error('AUX Home command confirmation timed out'));
       }, this.commandTimeoutMs);
-      this.pendingCommands.set(device.endpointId, { expected: changes, resolve, reject, timer });
+      this.pendingCommands.set(device.endpointId, { expected: changes, resolve, reject, timer, traceContext });
 
       try {
+        if (traceContext) {
+          this.trace?.emit('mqtt.publish', traceContext, { values: changes });
+        }
         mqtt.publish(device.endpointId, payload);
       } catch (error) {
         this.rejectPending(
@@ -341,7 +356,15 @@ export class AuxHomeProvider implements AuxProvider {
     if (pending && this.matchesExpected(updated.params, pending.expected)) {
       clearTimeout(pending.timer);
       this.pendingCommands.delete(message.deviceId);
+      if (pending.traceContext) {
+        this.trace?.emit('mqtt.confirmed', pending.traceContext, { values: pending.expected });
+      }
       pending.resolve();
+    }
+
+    const pushContext = this.trace?.createContext('provider.push', updated, { values: incoming });
+    if (pushContext) {
+      this.trace?.emit('state.push', pushContext);
     }
 
     for (const listener of this.listeners) {
@@ -392,6 +415,9 @@ export class AuxHomeProvider implements AuxProvider {
     }
     clearTimeout(pending.timer);
     this.pendingCommands.delete(deviceId);
+    if (pending.traceContext && error instanceof AuxProviderCommandSupersededError) {
+      this.trace?.emit('mqtt.superseded', pending.traceContext);
+    }
     pending.reject(error);
   }
 

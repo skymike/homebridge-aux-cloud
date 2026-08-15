@@ -7,6 +7,7 @@ import { createSocket } from 'dgram';
 import type { Logger } from 'homebridge';
 
 import type { AuxDevice } from './AuxCloudClient';
+import type { AuxTrace, AuxTraceContext } from './trace/AuxTrace';
 import { AcFreedomProvider } from './providers/AcFreedomProvider';
 import { AuxProviderCommandSupersededError, type AuxProvider } from './providers/AuxProvider';
 import { AC_POWER } from './constants';
@@ -37,6 +38,7 @@ export interface AuxDeviceControlOptions {
   localControlEnabled?: boolean;
   devices?: DeviceMapping[];
   cloudProvider?: Pick<AuxProvider, 'kind' | 'setDeviceParams'>;
+  trace?: AuxTrace;
 }
 
 const LAN_FAILURE_THRESHOLD = 3;
@@ -61,6 +63,7 @@ export class AuxDeviceControl {
   private consecutiveFailures = new Map<string, number>();
   private lanSessions = new Map<string, LanSession>();
   private logger?: Logger;
+  private readonly trace?: AuxTrace;
 
   constructor(options: AuxDeviceControlOptions) {
     this.cloudProvider = options.cloudProvider ?? new AcFreedomProvider({
@@ -70,6 +73,7 @@ export class AuxDeviceControl {
     });
     this.redactDeviceIdentifiers = this.cloudProvider.kind === 'aux-home';
     this.logger = this.redactDeviceIdentifiers ? undefined : options.logger;
+    this.trace = options.trace;
     this.loadMappings(options.devices ?? []);
   }
 
@@ -354,12 +358,16 @@ export class AuxDeviceControl {
     device: AuxDevice,
     params: Record<string, number>,
     retryCount: number = 2,
+    traceContext?: AuxTraceContext,
   ): Promise<void> {
     const attempts = retryCount + 1;
 
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        await this.cloudProvider.setDeviceParams(device, params);
+        if (traceContext) {
+          this.trace?.emit('control.attempt', traceContext, { route: 'cloud', attempt: attempt + 1 });
+        }
+        await this.cloudProvider.setDeviceParams(device, params, traceContext);
         return;
       } catch (error) {
         if (error instanceof AuxProviderCommandSupersededError) {
@@ -385,11 +393,15 @@ export class AuxDeviceControl {
       globalStrategy?: 'local-first' | 'cloud-only';
       localRetryCount?: number;
       cloudRetryCount?: number;
+      traceContext?: AuxTraceContext;
     },
   ): Promise<void> {
     const endpointId = device.endpointId;
     const mac = device.mac?.toLowerCase();
     const useLocal = mac ? this.shouldUseLocalControl(mac, options?.globalStrategy) : false;
+    if (options?.traceContext) {
+      this.trace?.emit('control.route', options.traceContext, { route: useLocal ? 'local' : 'cloud' });
+    }
 
     if (!useLocal) {
       // Always include pwr in cloud commands that don't already specify it.
@@ -400,7 +412,7 @@ export class AuxDeviceControl {
         AC_POWER in params || currentPwr === undefined
           ? params
           : { [AC_POWER]: currentPwr, ...params };
-      await this.sendCloudCommand(device, cloudParams, options?.cloudRetryCount ?? 2);
+      await this.sendCloudCommand(device, cloudParams, options?.cloudRetryCount ?? 2, options?.traceContext);
       this.recordSuccess(endpointId);
       return;
     }
@@ -430,14 +442,14 @@ export class AuxDeviceControl {
             : `LAN command failed for ${endpointId} (attempt ${failures}/${LAN_FAILURE_THRESHOLD})`);
         }
         this.logger?.debug('LAN failed %d times for %s, falling back to cloud', failures, endpointId);
-        await this.sendCloudCommand(device, params, options?.cloudRetryCount ?? 2);
+        await this.sendCloudCommand(device, params, options?.cloudRetryCount ?? 2, options?.traceContext);
         this.recordSuccess(endpointId);
         return;
       }
     }
 
     // Sin mapping LAN → cloud
-    await this.sendCloudCommand(device, params, options?.cloudRetryCount ?? 2);
+    await this.sendCloudCommand(device, params, options?.cloudRetryCount ?? 2, options?.traceContext);
     this.recordSuccess(endpointId);
   }
 

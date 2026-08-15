@@ -3,6 +3,7 @@ import type { Logger } from 'homebridge';
 import { AcFreedomProvider } from './AcFreedomProvider';
 import { AuxHomeProvider } from './AuxHomeProvider';
 import type { AuxProvider, AuxProviderKind } from './AuxProvider';
+import type { AuxTrace } from '../trace/AuxTrace';
 
 export interface CreateProviderOptions {
   provider?: AuxProviderKind;
@@ -10,6 +11,7 @@ export interface CreateProviderOptions {
   logger?: Logger;
   requestTimeoutMs?: number;
   commandTimeoutMs?: number;
+  trace?: AuxTrace;
 }
 
 export function createProvider(options: CreateProviderOptions = {}): AuxProvider {
@@ -23,6 +25,7 @@ export function createProvider(options: CreateProviderOptions = {}): AuxProvider
       logger: options.logger,
       requestTimeoutMs: options.requestTimeoutMs,
       commandTimeoutMs: options.commandTimeoutMs,
+      trace: options.trace,
     });
   }
 

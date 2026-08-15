@@ -39,6 +39,7 @@ import {
   AUX_MODE,
 } from './api/constants';
 import type { AuxDevice } from './api/AuxCloudClient';
+import type { AuxTraceContext } from './api/trace/AuxTrace';
 import type { AuxCloudPlatform, FeatureSwitchKey } from './platform';
 
 interface AuxCloudAccessoryContext {
@@ -248,7 +249,7 @@ export class AuxCloudPlatformAccessory {
   private configureBaseCharacteristics(): void {
     this.service.getCharacteristic(this.platform.Characteristic.Active)
       .onSet(this.handleActiveSet.bind(this))
-      .onGet(this.handleActiveGet.bind(this));
+      .onGet(() => this.traceGet('Active', this.handleActiveGet()));
 
     this.service.getCharacteristic(this.platform.Characteristic.TargetHeaterCoolerState)
       .setProps({
@@ -259,10 +260,10 @@ export class AuxCloudPlatformAccessory {
         ],
       })
       .onSet(this.handleTargetStateSet.bind(this))
-      .onGet(this.handleTargetStateGet.bind(this));
+      .onGet(() => this.traceGet('TargetHeaterCoolerState', this.handleTargetStateGet()));
 
     this.service.getCharacteristic(this.platform.Characteristic.CurrentHeaterCoolerState)
-      .onGet(this.handleCurrentHeaterCoolerStateGet.bind(this));
+      .onGet(() => this.traceGet('CurrentHeaterCoolerState', this.handleCurrentHeaterCoolerStateGet()));
 
     const currentTemperatureMin = celsiusToDisplay(CURRENT_TEMPERATURE_MIN_C, this.temperatureUnit);
     const currentTemperatureMax = celsiusToDisplay(CURRENT_TEMPERATURE_MAX_C, this.temperatureUnit);
@@ -273,7 +274,7 @@ export class AuxCloudPlatformAccessory {
         maxValue: Math.max(currentTemperatureMin, currentTemperatureMax),
         minStep: 0.1,
       })
-      .onGet(this.handleCurrentTemperatureGet.bind(this));
+      .onGet(() => this.traceGet('CurrentTemperature', this.handleCurrentTemperatureGet()));
 
     this.service.getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
       .setProps({
@@ -282,7 +283,7 @@ export class AuxCloudPlatformAccessory {
         minStep: this.temperatureStep,
       })
       .onSet(this.handleTargetTemperatureSet.bind(this))
-      .onGet(this.handleTargetTemperatureGet.bind(this));
+      .onGet(() => this.traceGet('HeatingThresholdTemperature', this.handleTargetTemperatureGet()));
 
     this.service.getCharacteristic(this.platform.Characteristic.CoolingThresholdTemperature)
       .setProps({
@@ -291,7 +292,7 @@ export class AuxCloudPlatformAccessory {
         minStep: this.temperatureStep,
       })
       .onSet(this.handleTargetTemperatureSet.bind(this))
-      .onGet(this.handleTargetTemperatureGet.bind(this));
+      .onGet(() => this.traceGet('CoolingThresholdTemperature', this.handleTargetTemperatureGet()));
 
     this.service.updateCharacteristic(
       this.platform.Characteristic.StatusFault,
@@ -308,7 +309,7 @@ export class AuxCloudPlatformAccessory {
       const minValue = levels[0]?.percent ?? 0;
       characteristic.setProps({ minValue, maxValue: 100, minStep: FAN_ROTATION_STEP });
       characteristic.onSet(this.handleRotationSpeedSet.bind(this))
-        .onGet(this.handleRotationSpeedGet.bind(this));
+        .onGet(() => this.traceGet('RotationSpeed', this.handleRotationSpeedGet()));
     } else if (existing) {
       this.service.removeCharacteristic(existing);
     }
@@ -331,7 +332,7 @@ export class AuxCloudPlatformAccessory {
     service.updateCharacteristic(this.platform.Characteristic.Name, 'Auto Fan');
     service.getCharacteristic(this.platform.Characteristic.On)
       .onSet(this.handleFanAutoSet.bind(this))
-      .onGet(() => this.handleFanAutoGet());
+      .onGet(() => this.traceGet('AutoFan.On', this.handleFanAutoGet()));
 
     this.fanAutoService = service;
   }
@@ -343,7 +344,7 @@ export class AuxCloudPlatformAccessory {
     if (shouldExpose) {
       const characteristic = existing ?? this.service.addCharacteristic(this.platform.Characteristic.SwingMode);
       characteristic.onSet(this.handleSwingModeSet.bind(this))
-        .onGet(this.handleSwingModeGet.bind(this));
+        .onGet(() => this.traceGet('SwingMode', this.handleSwingModeGet()));
     } else if (existing) {
       this.service.removeCharacteristic(existing);
     }
@@ -370,7 +371,7 @@ export class AuxCloudPlatformAccessory {
           .onSet(async (value) => {
             await this.handleFeatureSwitchSet(feature, Boolean(value));
           })
-          .onGet(() => this.handleFeatureSwitchGet(feature));
+          .onGet(() => this.traceGet(`${definition.label}.On`, this.handleFeatureSwitchGet(feature)));
 
         this.featureSwitchServices.set(feature, service);
       } else if (existing) {
@@ -397,7 +398,7 @@ export class AuxCloudPlatformAccessory {
         .onSet(async (value) => {
           await this.handleModeSwitchSet(definition.key, Boolean(value), definition.auxMode);
         })
-        .onGet(() => this.getAuxMode() === definition.auxMode);
+        .onGet(() => this.traceGet(`${definition.label}.On`, this.getAuxMode() === definition.auxMode));
 
       this.modeSwitchServices.set(definition.key, existing);
     }
@@ -437,8 +438,18 @@ export class AuxCloudPlatformAccessory {
       return;
     }
 
+    const oldValue = this.isDevicePowered()
+      ? this.platform.Characteristic.Active.ACTIVE
+      : this.platform.Characteristic.Active.INACTIVE;
     const isActive = Number(value) === this.platform.Characteristic.Active.ACTIVE;
     const payload = isActive ? AC_POWER_ON : AC_POWER_OFF;
+    const traceContext: AuxTraceContext = this.platform.trace.createContext('hap.set', this.device, {
+      service: 'HeaterCooler',
+      characteristic: 'Active',
+      oldValue,
+      newValue: Number(value),
+    });
+    this.platform.trace.emit('hap.set', traceContext);
 
     // Aplicar estado optimista inmediatamente
     this.device.params = this.device.params ?? {};
@@ -455,7 +466,7 @@ export class AuxCloudPlatformAccessory {
     );
 
     // Disparar comando en background
-    this.platform.startDeviceCommand(this.device, payload);
+    this.platform.startDeviceCommand(this.device, payload, undefined, traceContext);
 
     // Liberar pending una vez el comando puede haber completado con retries
     if (seq !== null) {
@@ -820,6 +831,19 @@ export class AuxCloudPlatformAccessory {
   // Internal helpers
   // ------------------------------------------------------------------
 
+  private traceGet(characteristic: string, value: CharacteristicValue): CharacteristicValue {
+    if (!this.device) {
+      return value;
+    }
+    const context = this.platform.trace.createContext('hap.get', this.device, {
+      service: 'HeaterCooler',
+      characteristic,
+      value,
+    });
+    this.platform.trace.emit('hap.get', context);
+    return value;
+  }
+
   private getFanLevels(): FanSpeedLevel[] {
     return this.supportsComfortableWind
       ? FAN_SPEED_LEVELS
@@ -1067,6 +1091,11 @@ export class AuxCloudPlatformAccessory {
     if (!this.device) {
       return;
     }
+
+    const traceContext = this.platform.trace.createContext('state.sync', this.device, {
+      service: 'HeaterCooler',
+    });
+    this.platform.trace.emit('hap.sync', traceContext);
 
     const auxMode = this.getAuxMode();
 
