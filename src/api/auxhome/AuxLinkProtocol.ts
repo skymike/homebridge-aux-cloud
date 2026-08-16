@@ -82,7 +82,7 @@ export function parseAuxLinkStatePayload(payload: Buffer): Partial<AuxLinkState>
     mode: payload[15] >> 5,
     sleep: (payload[15] >> 2) & 0x01,
     power: (payload[18] >> 5) & 0x01,
-    eco: (payload[18] >> 4) & 0x01,
+    eco: (payload[18] >> 3) & 0x01,
     health: (payload[18] >> 1) & 0x01,
     clean: (payload[18] >> 2) & 0x01,
     display: (payload[20] >> 4) & 0x01,
@@ -102,7 +102,7 @@ export function buildAuxLinkCommandPayload(params: Record<string, number>): Buff
   };
   const lanPayload = buildCommandPayload(commandParams);
   const body = Buffer.from(lanPayload.subarray(2, 25));
-  body[18] |= (eco & 0x01) << 4;
+  body[18] |= (eco & 0x01) << 3;
 
   return appendCommandPayloadChecksum(body);
 }

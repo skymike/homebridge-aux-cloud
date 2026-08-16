@@ -48,8 +48,14 @@ describe('AUXLink protocol', () => {
     });
   });
 
+  it('decodes ECO from the bit used by an AUX Home 2.3.2 device frame', () => {
+    const frame = Buffer.from('bb00070000010f00011149201440402000002800000000686c', 'hex');
+
+    expect(parseAuxLinkStatePayload(frame).eco).toBe(1);
+  });
+
   it('decodes every supported state feature bit', () => {
-    const frame = Buffer.from('bb00070000010f0001118d208fe0c0c4000036001800000000', 'hex');
+    const frame = Buffer.from('bb00070000010f0001118d208fe0c0c400002e001800000000', 'hex');
 
     expect(parseAuxLinkStatePayload(frame)).toEqual({
       temp: 25.5,
@@ -150,8 +156,8 @@ describe('AUXLink protocol', () => {
     ['sleep', 'ac_slp', 15, 0x04],
     ['health', 'ac_health', 18, 0x02],
     ['clean', 'ac_clean', 18, 0x04],
-    ['eco', 'eco', 18, 0x10],
-    ['cloud ECO', 'ecomode', 18, 0x10],
+    ['eco', 'eco', 18, 0x08],
+    ['cloud ECO', 'ecomode', 18, 0x08],
     ['display', 'scrdisp', 20, 0x10],
     ['mildew', 'mldprf', 20, 0x08],
   ])('encodes %s feature bit', (_name, parameter, byte, bit) => {
