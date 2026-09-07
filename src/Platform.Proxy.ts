@@ -49,7 +49,10 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
     if (expose === 'both') {
       if (!matterReady) {
         this.log.warn('[Platform] expose=both requested but Matter is not available/enabled; falling back to HAP only');
-        this.inner = new AuxCloudHAPPlatform(this.log, this.config, this.api);
+        this.inner = new AuxCloudHAPPlatform(this.log, {
+          ...this.config,
+          enableHomeKit: true,
+        }, this.api, this.dependencies);
         this.replayBufferedToInner();
         await this.inner.initialize();
         return;
@@ -98,7 +101,10 @@ export class AuxCloudPlatformProxy implements DynamicPlatformPlugin {
     } else if (expose === 'matter') {
       if (!matterReady) {
         this.log.warn('[Platform] Matter not available or not enabled in Homebridge settings; falling back to HAP');
-        this.inner = new AuxCloudHAPPlatform(this.log, this.config, this.api);
+        this.inner = new AuxCloudHAPPlatform(this.log, {
+          ...this.config,
+          enableHomeKit: true,
+        }, this.api, this.dependencies);
       } else {
         this.log.info('[Platform] Matter available — using Matter platform');
         this.inner = new AuxCloudMatterPlatform(this.log, this.config, this.api);

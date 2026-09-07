@@ -176,6 +176,27 @@ describe('active proxy platform AUX Home push integration', () => {
     jest.useRealTimers();
   });
 
+  test('expose=both falls back to an enabled HAP platform when Matter is unavailable', async () => {
+    const base = makePlatformHarness();
+    base.provider.listDevices.mockResolvedValue([]);
+    const proxy = new AuxCloudPlatformProxy(base.platform.log, {
+      platform: 'AUXCloud',
+      name: 'Fallback test',
+      provider: 'aux-home',
+      expose: 'both',
+      enableHomeKit: false,
+    } as PlatformConfig, base.platform.api, { providerFactory: () => base.provider });
+    const launch = (base.api.on as jest.Mock).mock.calls
+      .filter(([event]) => event === 'didFinishLaunching')
+      .at(-1)[1];
+
+    await launch();
+
+    const inner = (proxy as unknown as { inner: { enableHomeKit: boolean } }).inner;
+    expect(inner.enableHomeKit).toBe(true);
+    proxy.onPlatformUnload();
+  });
+
   test('the active HAP platform consumes provider pushes without polling', async () => {
     const base = makePlatformHarness();
     const hap = new AuxCloudHAPPlatform(base.platform.log, {
