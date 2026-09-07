@@ -588,15 +588,15 @@ export class AuxCloudHAPPlatform implements DynamicPlatformPlugin, IAuxCloudPlat
           friendlyName: mergedDevice.friendlyName,
         };
 
-        const handler = new AuxCloudPlatformAccessory(this as unknown as AuxCloudPlatform, accessory);
-        handler.updateAccessory(mergedDevice);
-
         const deviceConfig = this.config.devices?.find((d) => d.mac === mergedDevice.mac);
         const hapEnabled = this.enableHomeKit && (deviceConfig?.bridge !== 'Matter');
         if (hapEnabled) {
           this.accessories.push(accessory);
-          this.handlers.set(accessory.UUID, handler);
           this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+
+          const handler = new AuxCloudPlatformAccessory(this as unknown as AuxCloudPlatform, accessory);
+          handler.updateAccessory(mergedDevice);
+          this.handlers.set(accessory.UUID, handler);
         }
       }
     }

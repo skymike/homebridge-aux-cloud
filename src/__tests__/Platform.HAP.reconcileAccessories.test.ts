@@ -1,4 +1,9 @@
+jest.mock('../platformAccessory', () => ({
+  AuxCloudPlatformAccessory: jest.fn(),
+}));
+
 import { AuxCloudHAPPlatform } from '../Platform.HAP';
+import { AuxCloudPlatformAccessory } from '../platformAccessory';
 import { PLUGIN_NAME, PLATFORM_NAME } from '../settings';
 import type { AuxDevice } from '../api/AuxCloudClient';
 
@@ -35,6 +40,8 @@ function makeContext(opts: {
   enableHomeKit?: boolean;
   unregisterPlatformAccessories?: jest.Mock;
   listDevices?: jest.Mock;
+  platformAccessory?: jest.Mock;
+  registerPlatformAccessories?: jest.Mock;
 } = {}) {
   const log = { debug: jest.fn(), warn: jest.fn(), error: jest.fn(), info: jest.fn() };
   const unregisterPlatformAccessories = opts.unregisterPlatformAccessories ?? jest.fn();
@@ -65,8 +72,8 @@ function makeContext(opts: {
     accessories: opts.accessories ?? [],
     api: {
       hap: { uuid: { generate: (id: string) => `uuid-${id}` } },
-      platformAccessory: jest.fn(),
-      registerPlatformAccessories: jest.fn(),
+      platformAccessory: opts.platformAccessory ?? jest.fn(),
+      registerPlatformAccessories: opts.registerPlatformAccessories ?? jest.fn(),
       unregisterPlatformAccessories,
     },
     enableHomeKit: opts.enableHomeKit ?? true,
@@ -86,6 +93,23 @@ function callRefreshDevices(ctx: ReturnType<typeof makeContext>) {
 }
 
 describe('AuxCloudHAPPlatform.reconcileAccessories — cold start / cloud fetch failure', () => {
+  test('registers a new HomeKit accessory before its handler attaches services', () => {
+    const lifecycle: string[] = [];
+    const accessory = makeAccessory('cloud-1');
+    const platformAccessory = jest.fn(() => accessory);
+    const registerPlatformAccessories = jest.fn(() => lifecycle.push('registered'));
+    const mockedHandler = AuxCloudPlatformAccessory as jest.MockedClass<typeof AuxCloudPlatformAccessory>;
+    mockedHandler.mockImplementation(() => {
+      lifecycle.push('services-attached');
+      return { updateAccessory: jest.fn() } as unknown as AuxCloudPlatformAccessory;
+    });
+    const ctx = makeContext({ platformAccessory, registerPlatformAccessories });
+
+    callReconcile(ctx, [makeDevice('cloud-1')], true);
+
+    expect(lifecycle).toEqual(['registered', 'services-attached']);
+  });
+
   test('cloud-only accessory is NOT unregistered when cloud fetch failed (cold start, no cache)', () => {
     const cloudAccessory = makeAccessory('cloud-1', 'Aire Dormitorio');
     const unregister = jest.fn();
